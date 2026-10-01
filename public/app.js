@@ -1,4 +1,4 @@
-// Newsroll front-end: vertical news timeline + local AI (Ollama) features.
+// Newsroll front-end: a simple news timeline with local AI (Ollama) features.
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -11,10 +11,10 @@
     items: [],
     byId: new Map(),
     topic: storage(TOPIC_KEY) || 'all',
-    scope: 'today',
     // The previous visit is captured once so "new" markers survive refreshes.
     prevVisit: Number(storage(VISIT_KEY)) || 0,
     pending: null,
+    ai: null,
   };
 
   function storage(key, value) {
@@ -30,6 +30,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ts = (it) => Date.parse(it.published);
   const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
   function dayLabel(t) {
     const today = startOfDay(Date.now());
@@ -41,13 +42,11 @@
 
   function relTime(t) {
     const mins = Math.round((Date.now() - t) / 60000);
-    if (mins < 1) return 'just now';
+    if (mins < 1) return 'Just now';
     if (mins < 60) return `${mins}m ago`;
-    if (mins < 6 * 60) return `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
-    return new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    if (mins < 6 * 60) return `${Math.floor(mins / 60)}h ago`;
+    return new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   }
-
-  const hourLabel = (t) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric' }).replace(':00', '');
 
   const STOP = new Set('the a an and or of to in on for with at by from as is are was were be been has have had it its this that these those after over into amid says said new will can could would than more most about up out not but who what when how why first last says year years week day days'.split(' '));
   const tokenCache = new Map();
@@ -100,7 +99,7 @@
       }
       updateFooter(data);
     } catch (err) {
-      $('#timelineBody').innerHTML = `<div class="empty">Couldn't load the feed: ${esc(err.message)}</div>`;
+      if (!state.items.length) $('#timelineBody').innerHTML = `<div class="empty">Couldn't load the news. ${esc(err.message)}</div>`;
     } finally {
       btn.classList.remove('spinning');
     }
@@ -122,18 +121,22 @@
 
   function showNewPill(n) {
     const pill = $('#newPill');
-    $('span', pill).textContent = `${n} new ${n === 1 ? 'story' : 'stories'}`;
+    $('span', pill).textContent = plural(n, 'new story', 'new stories');
     pill.classList.remove('hidden');
   }
 
   function updateFooter(data) {
-    $('#updated').textContent = `· updated ${new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
-    const parts = [];
-    if (data.sample) parts.push('⚠️ Feeds unreachable — showing offline sample stories.');
-    else parts.push(`${data.items.length} stories from ${(data.feeds || []).length - data.errors.length} feeds.`);
-    if (data.errors.length && !data.sample) parts.push(`Failed: ${data.errors.map((e) => e.feed).join(', ')}.`);
-    parts.push('Shortcuts: j / k to move, Enter to expand, / to ask.');
-    $('#footNote').textContent = parts.join(' ');
+    const time = new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const sources = (data.feeds || []).length - data.errors.length;
+    $('#footNote').textContent = data.sample
+      ? `Couldn't reach the news feeds, so these are sample stories. Updated ${time}.`
+      : `${plural(data.items.length, 'story', 'stories')} from ${plural(sources, 'source')}. Updated ${time}.`;
+  }
+
+  function renderMasthead() {
+    const h = new Date().getHours();
+    $('#greeting').textContent = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    $('#dateLine').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
   }
 
   // ---------- Rendering ----------
@@ -142,12 +145,12 @@
       let i = 0;
       for (const e of entries) {
         if (!e.isIntersecting) continue;
-        e.target.style.setProperty('--d', `${Math.min(i++, 8) * 45}ms`);
+        e.target.style.setProperty('--d', `${Math.min(i++, 8) * 40}ms`);
         e.target.classList.add('in');
         revealer.unobserve(e.target);
       }
     },
-    { rootMargin: '0px 0px -40px 0px' },
+    { rootMargin: '0px 0px -30px 0px' },
   );
 
   function renderFilters() {
@@ -155,12 +158,9 @@
     for (const it of state.items) counts[it.topic] = (counts[it.topic] || 0) + 1;
     const topics = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
     if (state.topic !== 'all' && !counts[state.topic]) state.topic = 'all';
-    $('#filters').innerHTML = [
-      `<button class="filter ${state.topic === 'all' ? 'active' : ''}" data-topic="all">All <span class="n">${state.items.length}</span></button>`,
-      ...topics.map(
-        (t) => `<button class="filter ${state.topic === t ? 'active' : ''}" data-topic="${esc(t)}">${esc(t)} <span class="n">${counts[t]}</span></button>`,
-      ),
-    ].join('');
+    $('#filters').innerHTML = ['all', ...topics]
+      .map((t) => `<button class="filter${state.topic === t ? ' active' : ''}" data-topic="${esc(t)}">${t === 'all' ? 'All' : esc(t)}</button>`)
+      .join('');
   }
 
   function itemHtml(it) {
@@ -170,11 +170,8 @@
       <article class="tl-item${fresh ? ' fresh' : ''}" data-id="${it.id}" tabindex="-1">
         <span class="tl-dot"></span>
         <div class="tl-card" role="button" tabindex="0" aria-expanded="false">
-          <div class="tl-meta">
-            <time datetime="${esc(it.published)}">${relTime(t)}</time>·<span>${esc(it.source)}</span>·<span class="topic">${esc(it.topic)}</span>
-            ${fresh ? '<span class="new-tag">New</span>' : ''}
-          </div>
-          <h4 class="tl-title">${esc(it.title)}</h4>
+          <div class="tl-meta"><time datetime="${esc(it.published)}">${relTime(t)}</time> · ${esc(it.source)}${fresh ? ' · <b>New</b>' : ''}</div>
+          <h3 class="tl-title">${esc(it.title)}</h3>
           <div class="tl-more"><div><div class="tl-more-inner"></div></div></div>
         </div>
       </article>`;
@@ -183,6 +180,7 @@
   function render() {
     renderFilters();
     renderSuggestions();
+    updateSummaryButton();
     const list = visibleItems();
     const body = $('#timelineBody');
     if (!list.length) {
@@ -192,25 +190,16 @@
 
     let html = '';
     let curDay = null;
-    let curHour = null;
     for (const it of list) {
-      const t = ts(it);
-      const day = startOfDay(t);
+      const day = startOfDay(ts(it));
       if (day !== curDay) {
         curDay = day;
-        curHour = null;
-        const count = list.filter((x) => startOfDay(ts(x)) === day).length;
         html += `
           <div class="day" data-day="${day}">
-            <h3>${esc(dayLabel(t))}<span class="muted">${count} ${count === 1 ? 'story' : 'stories'}</span></h3>
-            <button class="btn ai-ghost sm day-sum"><span class="spark">✦</span> Summarize</button>
+            <h2>${esc(dayLabel(day))}</h2>
+            <button class="day-sum" title="Summarize ${esc(dayLabel(day).toLowerCase())}" aria-label="Summarize ${esc(dayLabel(day).toLowerCase())}"><span class="spark">✦</span> Summary</button>
           </div>
           <div class="day-summary hidden" data-day-summary="${day}"><div class="ai-output"></div></div>`;
-      }
-      const hour = new Date(t).getHours();
-      if (hour !== curHour) {
-        curHour = hour;
-        html += `<div class="hour">${esc(hourLabel(t))}</div>`;
       }
       html += itemHtml(it);
     }
@@ -253,12 +242,11 @@
         ${it.image ? `<img class="tl-img" alt="" loading="lazy" referrerpolicy="no-referrer" src="${esc(it.image)}" onload="this.classList.add('loaded')" onerror="this.remove()">` : ''}
         ${it.summary ? `<p class="tl-summary">${esc(it.summary)}</p>` : ''}
         <div class="tl-actions">
-          <button class="btn ai sm explain-btn"><span class="spark">✦</span> Explain this</button>
-          ${it.link ? `<a class="btn sm" href="${esc(it.link)}" target="_blank" rel="noopener">Read full story ↗</a>` : ''}
-          <span class="muted small">${new Date(ts(it)).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+          <button class="pill-btn ai explain-btn"><span class="spark">✦</span> Explain</button>
+          ${it.link ? `<a class="pill-btn" href="${esc(it.link)}" target="_blank" rel="noopener">Open story ↗</a>` : ''}
         </div>
         <div class="tl-explain"></div>
-        ${rel.length ? `<div class="related"><h4>Related on the timeline</h4>${rel.map((r) => `<button data-jump="${r.id}">${esc(r.title)} <span>· ${esc(r.source)}</span></button>`).join('')}</div>` : ''}`;
+        ${rel.length ? `<div class="related"><h4>Related</h4>${rel.map((r) => `<button data-jump="${r.id}">${esc(r.title)}</button>`).join('')}</div>` : ''}`;
       inner.dataset.ready = '1';
     }
     el.classList.toggle('open', open);
@@ -268,6 +256,7 @@
   function jumpTo(id) {
     const it = state.byId.get(id);
     if (!it) return;
+    closeSheet();
     if (state.topic !== 'all' && it.topic !== state.topic) setTopic('all');
     const el = $(`.tl-item[data-id="${id}"]`);
     if (!el) return;
@@ -283,8 +272,8 @@
   function setTopic(topic) {
     state.topic = topic;
     storage(TOPIC_KEY, topic);
+    $('#summaryBox').classList.add('hidden');
     render();
-    if (state.scope === 'topic') updateBriefingTitle();
   }
 
   // ---------- AI output rendering ----------
@@ -311,7 +300,7 @@
     const blocks = lines.map((line) => {
       const bullet = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
       if (bullet) return { cls: 'bullet', html: inline(bullet[1], sources) };
-      if (line.startsWith('⚠️')) return { cls: 'warn', html: esc(line) };
+      if (line.startsWith('⚠️')) return { cls: 'warn', html: esc(line.replace(/^⚠️\s*/, '')) };
       const label = line.match(LABELS);
       if (label) return { cls: '', html: `<span class="label">${esc(label[0])}</span>${inline(line.slice(label[0].length), sources)}` };
       return { cls: '', html: inline(line.replace(/^#+\s*/, ''), sources) };
@@ -372,7 +361,7 @@
       }
       renderAi(el, text.trim() || '⚠️ The model returned an empty reply. Try again.', sources);
     } catch (err) {
-      if (err.name !== 'AbortError') el.innerHTML = `<p class="warn">⚠️ ${esc(err.message)}</p>`;
+      if (err.name !== 'AbortError') el.innerHTML = `<p class="warn">${esc(err.message)}</p>`;
     } finally {
       if (streams.get(el) === controller) {
         el.classList.remove('streaming');
@@ -383,70 +372,89 @@
     }
   }
 
-  // ---------- Briefing ----------
-  function briefingSet() {
+  function setBusy(delta) {
+    activeStreams += delta;
+    // The dot in the "N." logo lights up while the AI is working.
+    document.body.classList.toggle('ai-busy', activeStreams > 0);
+  }
+
+  // ---------- Summary (one smart button) ----------
+  // Picks what's most useful: the current topic, what's new since the last
+  // visit, or simply today.
+  function summarySet() {
     const now = Date.now();
-    if (state.scope === 'since') {
-      const since = state.prevVisit || now - 12 * 3600e3;
-      return { items: state.items.filter((i) => ts(i) > since), label: state.prevVisit ? `since ${relTime(state.prevVisit)}` : 'the last 12 hours' };
-    }
-    if (state.scope === 'topic') {
-      if (state.topic === 'all') return { items: state.items, label: 'all topics' };
-      return { items: visibleItems(), label: `${state.topic} news` };
-    }
+    if (state.topic !== 'all') return { items: visibleItems(), label: `${state.topic} news`, text: `Summarize ${state.topic}` };
+    const fresh = state.prevVisit ? state.items.filter((i) => ts(i) > state.prevVisit) : [];
+    if (fresh.length >= 3) return { items: fresh, label: `since ${relTime(state.prevVisit).toLowerCase()}`, text: `Catch up on ${fresh.length} new stories` };
     let items = state.items.filter((i) => ts(i) >= startOfDay(now));
     if (items.length < 4) items = state.items.filter((i) => now - ts(i) < 24 * 3600e3);
-    return { items, label: 'today' };
+    return { items, label: 'today', text: 'Summarize today' };
   }
 
-  function updateBriefingTitle() {
-    const { items, label } = briefingSet();
-    const titles = { today: 'Your daily summary', since: 'Catch me up', topic: state.topic === 'all' ? 'Topic briefing' : `${state.topic} briefing` };
-    $('#briefingTitle').textContent = titles[state.scope];
-    $('#briefingMeta').textContent = `${items.length} ${items.length === 1 ? 'story' : 'stories'} · ${label}`;
+  function updateSummaryButton() {
+    const { items, text } = summarySet();
+    $('#summaryLabel').textContent = text;
+    $('#summaryCount').textContent = items.length ? plural(Math.min(items.length, 20), 'story', 'stories') : '';
+    $('#summaryBtn').disabled = !items.length;
   }
 
-  function generateBriefing() {
-    const { items, label } = briefingSet();
-    const out = $('#briefingOut');
-    if (!items.length) {
-      out.innerHTML = '<p class="muted">Nothing new here yet — check back soon.</p>';
-      return;
-    }
-    streamInto(out, 'summary', { ids: items.slice(0, 20).map((i) => i.id), label }, $('#briefingBtn'));
+  function generateSummary() {
+    const { items, label } = summarySet();
+    if (!items.length) return;
+    const box = $('#summaryBox');
+    box.classList.remove('hidden');
+    streamInto($('.ai-output', box), 'summary', { ids: items.slice(0, 20).map((i) => i.id), label }, $('#summaryBtn'));
+  }
+
+  // ---------- Ask sheet ----------
+  function openSheet() {
+    const sheet = $('#sheet');
+    if (sheet.classList.contains('open')) return;
+    sheet.classList.add('open');
+    sheet.setAttribute('aria-hidden', 'false');
+    $('#backdrop').classList.add('show');
+    document.body.classList.add('sheet-open');
+  }
+
+  function closeSheet() {
+    $('#sheet').classList.remove('open');
+    $('#sheet').setAttribute('aria-hidden', 'true');
+    $('#backdrop').classList.remove('show');
+    document.body.classList.remove('sheet-open');
+    $('#askInput').blur();
+  }
+
+  function ask(question) {
+    openSheet();
+    const thread = $('#thread');
+    const entry = document.createElement('div');
+    entry.className = 'qa';
+    entry.innerHTML = `<p class="q">${esc(question)}</p><div class="ai-output"></div>`;
+    thread.append(entry);
+    // Keep the thread short and focused.
+    while (thread.children.length > 4) thread.firstElementChild.remove();
+    entry.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const ids = state.topic === 'all' ? [] : visibleItems().map((i) => i.id);
+    streamInto($('.ai-output', entry), 'ask', { question, ids });
   }
 
   // ---------- AI status ----------
   let statusTimer;
   async function checkAi() {
-    const pill = $('#aiStatus');
-    const label = $('.ai-label', pill);
+    const note = $('#aiNote');
     try {
       const s = await (await fetch('/api/ai/status')).json();
-      pill.classList.remove('ok', 'warn', 'off');
-      if (s.online && s.installed) {
-        pill.classList.add('ok');
-        label.textContent = `${s.model} ready`;
-        pill.title = `Local AI via Ollama at ${s.host}`;
-      } else if (s.online) {
-        pill.classList.add('warn');
-        label.textContent = `Run: ollama pull ${s.model}`;
-        pill.title = `Ollama is running but "${s.model}" isn't installed`;
-      } else {
-        pill.classList.add('off');
-        label.textContent = 'AI offline';
-        pill.title = `Start Ollama (ollama serve) at ${s.host}`;
-      }
+      state.ai = s;
+      const ready = s.online && s.installed;
+      $('#aiSpark').classList.toggle('off', !ready);
+      note.classList.toggle('hidden', ready);
+      if (!s.online) note.innerHTML = `AI is offline. Start Ollama with <code>ollama serve</code>.`;
+      else if (!s.installed) note.innerHTML = `Almost there. Run <code>ollama pull ${esc(s.model)}</code> to enable AI.`;
       clearTimeout(statusTimer);
-      if (!(s.online && s.installed)) statusTimer = setTimeout(checkAi, 15000);
+      if (!ready) statusTimer = setTimeout(checkAi, 15000);
     } catch {
-      label.textContent = 'AI unknown';
+      /* status is best-effort */
     }
-  }
-
-  function setBusy(delta) {
-    activeStreams += delta;
-    $('#aiStatus').classList.toggle('busy', activeStreams > 0);
   }
 
   // ---------- Scroll effects ----------
@@ -456,10 +464,8 @@
     scrollQueued = true;
     requestAnimationFrame(() => {
       scrollQueued = false;
-      const doc = document.documentElement;
-      const max = doc.scrollHeight - innerHeight;
-      document.body.style.setProperty('--p', max > 0 ? (scrollY / max).toFixed(4) : 0);
-      // The timeline's coloured line "fills" as you read down through it.
+      document.body.classList.toggle('scrolled', scrollY > 8);
+      // The timeline line "fills" as you read down through it.
       const tl = $('#timeline');
       const r = tl.getBoundingClientRect();
       const fill = Math.min(1, Math.max(0, (innerHeight * 0.6 - r.top) / r.height));
@@ -516,9 +522,10 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('#sheet').classList.contains('open')) { closeSheet(); return; }
     const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
     if (e.key === '/' && !typing) { e.preventDefault(); $('#askInput').focus(); return; }
-    if (typing) { if (e.key === 'Escape') document.activeElement.blur(); return; }
+    if (typing) return;
     if (e.key === 'j') moveFocus(1);
     else if (e.key === 'k') moveFocus(-1);
     else if ((e.key === 'Enter' || e.key === ' ') && document.activeElement?.classList.contains('tl-card')) {
@@ -527,51 +534,50 @@
     }
   });
 
-  $$('.seg-btn').forEach((b) =>
-    b.addEventListener('click', () => {
-      $$('.seg-btn').forEach((x) => x.classList.toggle('active', x === b));
-      state.scope = b.dataset.scope;
-      updateBriefingTitle();
-    }),
-  );
+  $('#summaryBtn').addEventListener('click', generateSummary);
+  $('#summaryClose').addEventListener('click', () => {
+    const out = $('#summaryBox .ai-output');
+    streams.get(out)?.abort();
+    $('#summaryBox').classList.add('hidden');
+  });
 
-  $('#briefingBtn').addEventListener('click', generateBriefing);
-
+  $('#askInput').addEventListener('focus', openSheet);
   $('#askForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const question = $('#askInput').value.trim();
+    const input = $('#askInput');
+    const question = input.value.trim();
     if (!question) return;
-    const out = $('#askOut');
-    out.classList.remove('hidden');
-    out.innerHTML = `<div class="q">${esc(question)}</div><div class="ai-output"></div>`;
-    const ids = state.topic === 'all' ? [] : visibleItems().map((i) => i.id);
-    streamInto($('.ai-output', out), 'ask', { question, ids }, $('#askForm button'));
+    input.value = '';
+    ask(question);
   });
-
   $('#suggestions').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
-    if (!chip) return;
-    $('#askInput').value = chip.textContent;
-    $('#askForm').requestSubmit();
+    if (chip) ask(chip.textContent);
   });
+  $('#sheetClose').addEventListener('click', closeSheet);
+  $('#backdrop').addEventListener('click', closeSheet);
 
   $('#refreshBtn').addEventListener('click', () => loadFeed({ force: true }));
   $('#newPill').addEventListener('click', applyPending);
-  $('#newPill').addEventListener('keydown', (e) => e.key === 'Enter' && applyPending());
   addEventListener('scroll', onScroll, { passive: true });
   addEventListener('resize', onScroll);
 
-  // Keep relative timestamps fresh.
-  setInterval(() => $$('.tl-item time').forEach((t) => (t.textContent = relTime(Date.parse(t.dateTime)))), 60000);
+  // Keep relative timestamps and the greeting fresh.
+  setInterval(() => {
+    $$('.tl-item time').forEach((t) => (t.textContent = relTime(Date.parse(t.dateTime))));
+    renderMasthead();
+  }, 60000);
 
   // ---------- Boot ----------
+  renderMasthead();
   const sk = $('#skeletonTpl');
   $('#timelineBody').append(...Array.from({ length: 6 }, () => sk.content.cloneNode(true)));
 
-  loadFeed({ initial: true }).then(() => {
-    updateBriefingTitle();
-    storage(VISIT_KEY, String(Date.now()));
-  });
+  loadFeed({ initial: true }).then(() => storage(VISIT_KEY, String(Date.now())));
   checkAi();
   setInterval(() => loadFeed(), REFRESH_MS);
+
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
 })();
