@@ -48,7 +48,6 @@
   }
 
   const hourLabel = (t) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric' }).replace(':00', '');
-  const topicVar = (topic) => `var(--t-${String(topic).toLowerCase()}, var(--t-general))`;
 
   const STOP = new Set('the a an and or of to in on for with at by from as is are was were be been has have had it its this that these those after over into amid says said new will can could would than more most about up out not but who what when how why first last says year years week day days'.split(' '));
   const tokenCache = new Map();
@@ -159,7 +158,7 @@
     $('#filters').innerHTML = [
       `<button class="filter ${state.topic === 'all' ? 'active' : ''}" data-topic="all">All <span class="n">${state.items.length}</span></button>`,
       ...topics.map(
-        (t) => `<button class="filter ${state.topic === t ? 'active' : ''}" data-topic="${esc(t)}" style="--c:${topicVar(t)}">${esc(t)} <span class="n">${counts[t]}</span></button>`,
+        (t) => `<button class="filter ${state.topic === t ? 'active' : ''}" data-topic="${esc(t)}">${esc(t)} <span class="n">${counts[t]}</span></button>`,
       ),
     ].join('');
   }
@@ -168,7 +167,7 @@
     const t = ts(it);
     const fresh = state.prevVisit && t > state.prevVisit;
     return `
-      <article class="tl-item${fresh ? ' fresh' : ''}" data-id="${it.id}" style="--c:${topicVar(it.topic)}" tabindex="-1">
+      <article class="tl-item${fresh ? ' fresh' : ''}" data-id="${it.id}" tabindex="-1">
         <span class="tl-dot"></span>
         <div class="tl-card" role="button" tabindex="0" aria-expanded="false">
           <div class="tl-meta">
@@ -204,7 +203,7 @@
         html += `
           <div class="day" data-day="${day}">
             <h3>${esc(dayLabel(t))}<span class="muted">${count} ${count === 1 ? 'story' : 'stories'}</span></h3>
-            <button class="btn ghost sm day-sum"><span class="spark">✦</span> Summarize</button>
+            <button class="btn ai-ghost sm day-sum"><span class="spark">✦</span> Summarize</button>
           </div>
           <div class="day-summary hidden" data-day-summary="${day}"><div class="ai-output"></div></div>`;
       }
@@ -254,7 +253,7 @@
         ${it.image ? `<img class="tl-img" alt="" loading="lazy" referrerpolicy="no-referrer" src="${esc(it.image)}" onload="this.classList.add('loaded')" onerror="this.remove()">` : ''}
         ${it.summary ? `<p class="tl-summary">${esc(it.summary)}</p>` : ''}
         <div class="tl-actions">
-          <button class="btn primary sm explain-btn"><span class="spark">✦</span> Explain this</button>
+          <button class="btn ai sm explain-btn"><span class="spark">✦</span> Explain this</button>
           ${it.link ? `<a class="btn sm" href="${esc(it.link)}" target="_blank" rel="noopener">Read full story ↗</a>` : ''}
           <span class="muted small">${new Date(ts(it)).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>
         </div>

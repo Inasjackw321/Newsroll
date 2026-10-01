@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Newsroll</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='7' fill='%236d5efc'/><circle cx='16' cy='16' r='13' fill='none' stroke='%236d5efc' stroke-opacity='.35' stroke-width='3'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='7' fill='%23000'/><circle cx='16' cy='16' r='13' fill='none' stroke='%23000' stroke-opacity='.35' stroke-width='3'/></svg>" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -44,16 +44,16 @@
       </div>
       <div class="card-foot">
         <span class="muted small" id="briefingMeta"></span>
-        <button class="btn primary" id="briefingBtn"><span class="spark">✦</span> Generate briefing</button>
+        <button class="btn ai" id="briefingBtn"><span class="spark">✦</span> Generate briefing</button>
       </div>
     </section>
 
     <!-- Ask -->
     <section class="card ask">
       <form id="askForm" autocomplete="off">
-        <span class="ask-icon" aria-hidden="true">?</span>
+        <span class="ask-icon" aria-hidden="true">✦</span>
         <input id="askInput" type="text" placeholder="Ask about the news… e.g. “What's happening with the economy?”" maxlength="500" />
-        <button class="btn primary" type="submit">Ask</button>
+        <button class="btn ai" type="submit">Ask</button>
       </form>
       <div class="suggestions" id="suggestions"></div>
       <div class="ai-output answer hidden" id="askOut"></div>

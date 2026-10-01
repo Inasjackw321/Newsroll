@@ -22,7 +22,7 @@ If Ollama isn't running, the timeline still works and the AI pill in the header 
 **Timeline**
 - One vertical timeline grouped by day and hour, with a "Now" marker at the top. Day headers stay pinned while you scroll.
 - Small headlines that expand smoothly to show the summary, image, source link and related stories.
-- Topic filter chips (Politics, World, Business, Tech, …), colour-coded on the timeline.
+- Topic filter chips (Politics, World, Business, Tech, …).
 - Stories published since your last visit get a pulsing dot and a **New** tag.
 - Feeds refresh every 5 minutes. If you've scrolled down, a "N new stories" pill appears instead of the page jumping.
 - Keyboard shortcuts: `j` / `k` to move between stories, `Enter` to expand, `/` to jump to the question box.
@@ -37,7 +37,7 @@ If Ollama isn't running, the timeline still works and the AI pill in the header 
 - **Related stories**: found instantly by keyword similarity, with no model call.
 
 **Animations**
-Cards rise in with a stagger as they scroll into view, and the timeline line fills with colour as you read down it. There's also a scroll progress bar, smooth expand and collapse, a typing cursor while answers stream, a "thinking" indicator, a highlight flash when you jump to a story and shimmer placeholders while loading. If your system is set to reduced motion, all of this is turned off.
+The interface is black and white with simple text; colour (a violet-to-teal accent) appears only on AI features — briefings, answers, citations and AI buttons. Cards rise in with a stagger as they scroll into view, and the timeline line fills with colour as you read down it. There's also a scroll progress bar, smooth expand and collapse, a typing cursor while answers stream, a "thinking" indicator, a highlight flash when you jump to a story and shimmer placeholders while loading. If your system is set to reduced motion, all of this is turned off.
 
 ## Configuration
 
