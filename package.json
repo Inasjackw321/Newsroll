@@ -65,5 +65,9 @@
     },
     "artifactName": "Newsroll-${version}-${os}-${arch}.${ext}"
   },
-  "desktopName": "newsroll.desktop"
+  "desktopName": "newsroll.desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Inasjackw321/Newsroll.git"
+  }
 }

@@ -40,10 +40,7 @@ If none of the feeds can be fetched (for example when you're offline), Newsroll 
 
 ### Publishing a new version
 
-1. Bump `version` in `package.json` (e.g. `0.2.0`) and push to `main`.
-2. On GitHub, go to **Actions → Build desktop app → Run workflow**.
-
-This builds the Mac, Windows and Linux installers and publishes them as release `v0.2.0`. Pushing a `v*` tag does the same.
+Bump `version` in `package.json` (e.g. to `0.2.0`) and push to `main`. GitHub Actions (`.github/workflows/release.yml`) builds the Mac, Windows and Linux installers and publishes them as release `v0.2.0`. Each build takes about 10 minutes.
 
 ## Using it
 
