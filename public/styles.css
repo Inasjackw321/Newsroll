@@ -367,3 +367,12 @@ body.sheet-open .composer { background: transparent; }
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   html { scroll-behavior: auto; }
 }
+
+/* ---------- Desktop app (Electron) ---------- */
+.desktop .appbar { -webkit-app-region: drag; user-select: none; }
+.desktop .appbar a, .desktop .appbar button { -webkit-app-region: no-drag; }
+/* Leave room for the macOS window buttons. */
+.platform-darwin .appbar { padding-left: max(84px, calc(50% - 304px)); }
+.desktop ::-webkit-scrollbar { width: 8px; }
+.desktop ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.desktop ::-webkit-scrollbar-track { background: transparent; }

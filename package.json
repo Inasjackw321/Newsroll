@@ -2,15 +2,68 @@
   "name": "newsroll",
   "version": "0.1.0",
   "description": "A minimal RSS news timeline with local AI briefings and Q&A powered by Ollama",
-  "main": "server.js",
+  "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "app": "electron .",
+    "dist": "electron-builder",
     "test": "node --test"
   },
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "author": "Newsroll",
+  "homepage": "https://github.com/Inasjackw321/Newsroll",
+  "build": {
+    "appId": "com.newsroll.app",
+    "productName": "Newsroll",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "feeds.json",
+      "lib/**",
+      "public/**",
+      "electron/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.news",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Newsroll"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "News",
+      "syncDesktopName": true
+    },
+    "artifactName": "Newsroll-${version}-${os}-${arch}.${ext}"
+  },
+  "desktopName": "newsroll.desktop"
 }

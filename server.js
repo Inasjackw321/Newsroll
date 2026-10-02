@@ -27,8 +27,10 @@ const MIME = {
 let cache = { items: [], fetchedAt: 0, errors: [], sample: false };
 let inflight = null;
 
+// The desktop app points NEWSROLL_FEEDS at an editable copy in the user's data folder.
 function loadFeeds() {
-  return JSON.parse(fs.readFileSync(path.join(__dirname, 'feeds.json'), 'utf8'));
+  const file = process.env.NEWSROLL_FEEDS || path.join(__dirname, 'feeds.json');
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
 async function fetchFeed(feed) {
@@ -199,16 +201,34 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Starts listening on 127.0.0.1. Resolves with the port actually used, so the
+// desktop app can fall back to any free port if the preferred one is taken.
+function start(port = PORT, host = '127.0.0.1') {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      if (err.code === 'EADDRINUSE' && port !== 0) {
+        server.removeListener('error', onError);
+        resolve(start(0, host));
+      } else reject(err);
+    };
+    server.once('error', onError);
+    server.listen(port, host, () => {
+      server.removeListener('error', onError);
+      getItems().catch((err) => console.error('Initial feed load failed:', err.message));
+      resolve(server.address().port);
+    });
+  });
+}
+
 if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log(`📰 Newsroll running at http://localhost:${PORT}`);
+  start(PORT, process.env.HOST || '127.0.0.1').then((port) => {
+    console.log(`📰 Newsroll running at http://localhost:${port}`);
     ai.status().then((s) => {
       if (!s.online) console.log(`   ⚠️  Ollama not reachable at ${s.host} — AI features disabled until it is running.`);
       else if (!s.installed) console.log(`   ⚠️  Model "${s.model}" not installed. Run: ollama pull ${s.model}`);
       else console.log(`   ✦ AI ready with ${s.model}`);
     });
-    getItems().catch((err) => console.error('Initial feed load failed:', err.message));
   });
 }
 
-module.exports = { server, refresh };
+module.exports = { server, start, refresh };
