@@ -343,7 +343,9 @@
   let activeStreams = 0;
 
   // POSTs to an AI endpoint and streams the model's reply into `el`.
+  // Resolves with { text, sources, mode, groups }, or null if it failed.
   async function streamInto(el, endpoint, payload, button) {
+    let result = null;
     streams.get(el)?.abort();
     const controller = new AbortController();
     streams.set(el, controller);
@@ -364,20 +366,29 @@
         throw new Error(err.error || `Request failed (${res.status})`);
       }
       const sources = (res.headers.get('X-Newsroll-Sources') || '').split(',').map((id) => state.byId.get(id)).filter(Boolean);
+      const mode = res.headers.get('X-Newsroll-Mode') || 'answer';
+      const groups = decodeURIComponent(res.headers.get('X-Newsroll-Groups') || '').split('|').filter(Boolean);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let text = '';
       let queued = false;
+      let finished = false;
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         text += decoder.decode(value, { stream: true });
         if (!queued) {
           queued = true;
-          requestAnimationFrame(() => { queued = false; renderAi(el, text, sources); });
+          requestAnimationFrame(() => {
+            queued = false;
+            if (!finished) renderAi(el, text, sources);
+          });
         }
       }
-      renderAi(el, text.trim() || '⚠️ The model returned an empty reply. Try again.', sources);
+      finished = true;
+      text = text.trim() || '⚠️ The model returned an empty reply. Try again.';
+      renderAi(el, text, sources);
+      result = { text, sources, mode, groups };
     } catch (err) {
       if (err.name !== 'AbortError') el.innerHTML = `<p class="warn">${esc(err.message)}</p>`;
     } finally {
@@ -388,6 +399,7 @@
       if (button) button.disabled = false;
       setBusy(-1);
     }
+    return result;
   }
 
   function setBusy(delta) {
@@ -443,18 +455,52 @@
     $('#askInput').blur();
   }
 
-  function ask(question) {
+  async function ask(question, { general = false } = {}) {
     openSheet();
     const thread = $('#thread');
+    // The last couple of answers go along so follow-ups ("why?") make sense.
+    const history = $$('.qa', thread)
+      .filter((e) => e.dataset.answer)
+      .slice(-2)
+      .map((e) => ({ q: e.dataset.q, a: e.dataset.answer }));
     const entry = document.createElement('div');
     entry.className = 'qa';
-    entry.innerHTML = `<p class="q">${esc(question)}</p><div class="ai-output"></div>`;
+    entry.innerHTML = `<p class="q">${esc(question)}${general ? ' <span class="tg">general knowledge</span>' : ''}</p><div class="ai-output"></div><div class="qa-after"></div>`;
     thread.append(entry);
     // Keep the thread short and focused.
     while (thread.children.length > 4) thread.firstElementChild.remove();
     entry.scrollIntoView({ behavior: 'smooth', block: 'end' });
     const ids = state.topic === 'all' ? [] : visibleItems().map((i) => i.id);
-    streamInto($('.ai-output', entry), 'ask', { question, ids });
+    const out = $('.ai-output', entry);
+    const r = await streamInto(out, 'ask', { question, ids, history, general });
+    if (!r) return;
+    entry.dataset.q = question;
+    entry.dataset.answer = r.text.replace(/\s*\[\d+(?:\s*[,&]\s*\d+)*\]/g, '').slice(0, 600);
+    $('.qa-after', entry).innerHTML = afterAnswer(out, r, question);
+    entry.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+
+  // What to show under an answer: its sources, or ways forward if nothing was found.
+  function afterAnswer(out, r, question) {
+    const notFound = r.mode === 'notfound' || (r.mode === 'answer' && /couldn['’]t find|don['’]t cover|no (story|stories) (answer|mention)/i.test(r.text));
+    if (notFound) {
+      $$('.cite', out).forEach((c) => c.remove()); // a "not found" reply shouldn't cite anything
+      const groupBtns = r.groups
+        .map((g) => `<button class="pill-btn" data-open-group="${esc(g)}">Turn on ${esc(g)} sources</button>`)
+        .join('');
+      return `<div class="qa-actions">${groupBtns}<button class="pill-btn ai" data-ask-general="${esc(question)}"><span class="spark">✦</span> Ask the AI anyway</button></div>
+        <p class="qa-note">“Ask anyway” answers from the AI's own knowledge, which may be out of date.</p>`;
+    }
+    if (r.mode === 'general') return '<p class="qa-note">From the AI\'s general knowledge, not your news. It may be out of date.</p>';
+    if (r.mode !== 'answer' || !r.sources.length) return '';
+    // List the stories the answer cited, or the top matches if it cited none.
+    const cited = [...new Set([...r.text.matchAll(/\[(\d+(?:\s*[,&]\s*\d+)*)\]/g)].flatMap((m) => m[1].split(/[,&]/).map((n) => Number(n.trim()))))]
+      .map((n) => ({ n, it: r.sources[n - 1] }))
+      .filter((c) => c.it);
+    const list = cited.length ? cited : r.sources.slice(0, 3).map((it, i) => ({ n: i + 1, it }));
+    return `<div class="qa-sources"><span class="muted small">Sources</span>${list
+      .map(({ n, it }) => `<button data-jump="${it.id}"><span class="n">${n}</span>${esc(it.title)} <span class="muted">· ${esc(it.source)}</span></button>`)
+      .join('')}</div>`;
   }
 
   // ---------- AI status ----------
@@ -513,6 +559,14 @@
 
     const filter = e.target.closest('.filter');
     if (filter) return setTopic(filter.dataset.topic);
+
+    const groupBtn = e.target.closest('[data-open-group]');
+    if (groupBtn) return openSettings('sources', groupBtn.dataset.openGroup);
+    const general = e.target.closest('[data-ask-general]');
+    if (general) {
+      general.closest('.qa-after').innerHTML = ''; // the follow-up answer appears below
+      return ask(general.dataset.askGeneral, { general: true });
+    }
 
     const opener = e.target.closest('[data-open-settings]');
     if (opener) return openSettings(opener.dataset.openSettings);
@@ -639,7 +693,10 @@
   let sourcesChanged = false;
   const openGroups = new Set(['Added by you', 'Telegram']);
 
-  function openSettings(tab = state.tab) {
+  let focusGroup = null;
+  function openSettings(tab = state.tab, group = null) {
+    focusGroup = group;
+    if (group) openGroups.add(group);
     closeSheet();
     storage(WELCOME_KEY, '1');
     $('#welcome').classList.add('hidden');
@@ -677,6 +734,10 @@
     if (!sourcesData) $('#sourceList').innerHTML = '<p class="muted">Loading sources…</p>';
     sourcesData = await (await fetch('/api/sources')).json();
     renderSources();
+    if (focusGroup) {
+      $(`.group[data-group="${CSS.escape(focusGroup)}"]`)?.scrollIntoView({ block: 'start' });
+      focusGroup = null;
+    }
   }
 
   function statusText(src) {
@@ -841,7 +902,7 @@
         else action = `<button class="pill-btn ai" data-pull="${esc(r.name)}">Download · ${esc(r.size)}</button>`;
         return `
           <div class="rec-row">
-            <div><div class="model-name">${esc(r.label)} <span class="muted small">${esc(r.name)}</span></div><div class="muted small">${esc(r.note)}</div>
+            <div><div class="model-name">${esc(r.label)} <span class="muted small">${esc(r.name)}</span>${r.recommended ? ' <span class="badge">Recommended</span>' : ''}</div><div class="muted small">${esc(r.note)}</div>
             ${p?.error ? `<div class="hint warn">${esc(p.error)}</div>` : ''}</div>
             <div class="rec-action">${action}</div>
           </div>`;
@@ -853,6 +914,7 @@
         <span class="spark">✦</span>
         <div><b>${esc(current)}</b><div class="muted small">${isInstalled(current) ? 'Ready. Used for summaries, answers and explanations.' : 'Selected, but not downloaded yet. Download it below or pick another.'}</div></div>
       </div>
+      ${/^smollm2/.test(current) ? `<p class="hint">Tip: ${esc(current)} is tiny, so it sometimes misses things. For noticeably better answers, download <b>Qwen 2.5</b> below (1.9 GB).</p>` : ''}
       <h3>Your models</h3>
       <div class="model-list">${installedHtml}</div>
       <h3>Get more models</h3>

@@ -44,18 +44,13 @@ test('streams tokens from /api/chat', async () => {
   assert.strictEqual(mock.lastRequest.stream, true);
 });
 
-test('ranks stories by relevance to the question', () => {
-  const items = [
-    { id: '1', title: 'Football final ends in penalties', summary: '', topic: 'Sports' },
-    { id: '2', title: 'Central bank holds interest rates', summary: 'Inflation is easing', topic: 'Business' },
-    { id: '3', title: 'New phone launched', summary: '', topic: 'Tech' },
-  ];
-  assert.strictEqual(ai.rankByRelevance('What is happening with inflation and interest rates?', items)[0].id, '2');
-  // No keyword match falls back to the latest stories.
-  assert.strictEqual(ai.rankByRelevance('Anything else?', items).length, 3);
-});
-
-test('prompts number the stories for citation', () => {
-  const msgs = ai.summaryPrompt([{ title: 'A', source: 'S', summary: 'x', published: new Date().toISOString() }], 'today');
-  assert.match(msgs[1].content, /^Stories for today:\n\[1\] \(S, .*\) A — x/);
+test('prompts number the stories and include an example and the date', () => {
+  const story = { title: 'A', source: 'S', summary: 'x', published: new Date().toISOString() };
+  const summary = ai.summaryPrompt([story], 'today');
+  assert.match(summary[1].content, /^Stories for today:\n\[1\] A \(S, just now\)/);
+  const ask = ai.askPrompt('What is A?', [story], [{ q: 'earlier', a: 'reply' }]);
+  assert.match(ask[0].content, /Today is /);
+  assert.match(ask[0].content, /Example answer/);
+  assert.deepStrictEqual(ask.slice(1, 3).map((m) => m.role), ['user', 'assistant']); // history comes first
+  assert.match(ask.at(-1).content, /Question: What is A\?$/);
 });

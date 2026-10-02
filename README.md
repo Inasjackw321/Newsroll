@@ -54,6 +54,17 @@ Open **Settings** (the sliders icon at the top right) → **News sources**.
 
 **Telegram** channels are read from their public web page (`t.me/s/<channel>`), so you don't need a Telegram account. Their posts appear in the timeline with a small *Telegram* tag, and a **Telegram** filter chip appears at the top. Only public channels work. Private channels and groups can't be read this way.
 
+## Asking questions
+
+Type anything into **Ask about the news** at the bottom.
+
+- **News questions** ("What's happening in the Middle East?", "Any news on Apple?") search your stories first. The search knows regions and topics: "Middle East" finds Gaza, Israel, Iran and Lebanon, and "the economy" finds inflation, rates and markets. It weights names like "Tomlin" above common words and prefers fresh stories. The AI answers from the best few, and the stories it used are listed under the answer.
+- **Follow-ups** like "why?" or "tell me more" build on your previous question.
+- **Maths** ("5 + 5") is calculated exactly. Greetings and "what can you do?" get a quick reply without waiting for the model.
+- **Nothing found?** Newsroll says so and suggests which sources to turn on. **Ask the AI anyway** answers from the model's own knowledge, clearly labelled as possibly out of date.
+
+Answer quality depends on the model. The default, SmolLM2, is tiny and fast but sometimes misses details. **Qwen 2.5** (1.9 GB) gives much better answers and is a one-click download in Settings.
+
 ## Choosing the AI
 
 Open **Settings → ✦ AI model**:
@@ -104,7 +115,9 @@ lib/telegram.js  Reads public Telegram channels from t.me/s/<channel>
 lib/catalog.js   The built-in list of 181 sources
 lib/settings.js  Saves enabled sources, added sources and the chosen model
 lib/topics.js    Keyword topic tagging
-lib/ai.js        Prompts, relevance ranking and Ollama streaming
+lib/search.js    Story search for questions (BM25 weighting, region/topic expansion)
+lib/intent.js    Question types (news / maths / greeting / help) and exact maths
+lib/ai.js        Prompts and Ollama streaming
 lib/sample.js    Offline sample stories
 public/          The app: index.html, styles.css, app.js, the service worker
                  (sw.js), manifest and icons

@@ -10,6 +10,8 @@ const { sampleItems } = require('./lib/sample');
 const { GROUP_ORDER, slug } = require('./lib/catalog');
 const settings = require('./lib/settings');
 const ai = require('./lib/ai');
+const { search } = require('./lib/search');
+const intent = require('./lib/intent');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -198,15 +200,27 @@ function readBody(req) {
 
 // Streams model output as plain text. The stories the model was shown are sent
 // up-front in a header so the client can turn [n] citations into links.
-async function streamAi(req, res, messages, sources = []) {
-  const controller = new AbortController();
-  res.on('close', () => controller.abort());
-  res.writeHead(200, {
+function aiHeaders(sources, mode, groups = []) {
+  return {
     'Content-Type': 'text/plain; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Accel-Buffering': 'no',
     'X-Newsroll-Sources': sources.map((s) => s.id).join(','),
-  });
+    'X-Newsroll-Mode': mode,
+    'X-Newsroll-Groups': encodeURIComponent(groups.join('|')),
+  };
+}
+
+// A reply that doesn't need the model (maths, greetings, "not found").
+function sendText(res, text, mode, groups) {
+  res.writeHead(200, aiHeaders([], mode, groups));
+  res.end(text);
+}
+
+async function streamAi(req, res, messages, sources = [], mode = 'answer') {
+  const controller = new AbortController();
+  res.on('close', () => controller.abort());
+  res.writeHead(200, aiHeaders(sources, mode));
   try {
     await ai.streamChat(messages, (token) => res.write(token), controller.signal);
   } catch (err) {
@@ -233,6 +247,47 @@ function pickItems(items, ids) {
   if (!Array.isArray(ids) || !ids.length) return items;
   const wanted = new Set(ids);
   return items.filter((it) => wanted.has(it.id));
+}
+
+const HELP_TEXT = [
+  "I'm Newsroll's assistant. I read the stories in your timeline and answer questions about them.",
+  '- Ask things like "What\'s happening in the Middle East?" or "Any news about Apple?"',
+  '- Follow up with "why?" or "tell me more"',
+  '- Tap the numbers in my answers to jump to the story',
+  'You can also tap ✦ Summarize for a quick briefing, or ✦ Explain on any story.',
+].join('\n');
+
+// "what happened with Mike Tomlin?" → "Mike Tomlin"
+function subjectOf(question) {
+  const subject = question
+    .replace(/[?.!]+$/, '')
+    .replace(/^(please\s+)?(can you\s+)?(tell me|give me|show me|update me|catch me up)?\s*(what('s| is| has| happened| is happening| is going on)|what's going on|how('s| is)|is there|are there|any)?\s*(the\s+)?(latest|news|an update|updates?|new|happening|going on|happened|anything|something)?\s*(about|on|with|to|in|regarding|for)?\s+/i, '')
+    .replace(/^the\s+/i, '')
+    .trim();
+  return subject || question.replace(/[?.!]+$/, '');
+}
+
+async function answerQuestion(res, question, items, history, general) {
+  const kind = intent.classify(question);
+  if (kind === 'math') {
+    const value = intent.evalMath(question);
+    return sendText(res, `${question.replace(/[=?]\s*$/, '').trim()} = ${intent.formatNumber(value)}`, 'direct');
+  }
+  if (kind === 'greeting') {
+    const topic = items.find((it) => it.topic && it.topic !== 'General')?.topic;
+    const example = topic ? `What's happening in ${topic.toLowerCase()}?` : 'What happened today?';
+    return sendText(res, `Hi! Ask me anything about today's news, like “${example}”`, 'direct');
+  }
+  if (kind === 'help') return sendText(res, HELP_TEXT, 'direct');
+  if (general) return streamAi(null, res, ai.generalPrompt(question, history), [], 'general');
+
+  // Follow-ups ("why?", "tell me more") search using the previous question too.
+  const query = history.length && intent.isFollowUp(question) ? `${history[history.length - 1].q} ${question}` : question;
+  const found = search(query, items, { limit: 8 });
+  if (!found.matched) {
+    return sendText(res, `I couldn't find anything about “${subjectOf(question)}” in your ${items.length} stories.`, 'notfound', found.groups);
+  }
+  return streamAi(null, res, ai.askPrompt(question, found.items, history), found.items, 'answer');
 }
 
 async function handleApi(req, res, url) {
@@ -312,8 +367,11 @@ async function handleApi(req, res, url) {
     if (action === 'ask') {
       const question = String(body.question || '').trim().slice(0, 500);
       if (!question) return sendJson(res, 400, { error: 'Question is required' });
-      const chosen = ai.rankByRelevance(question, pickItems(items, body.ids));
-      return streamAi(req, res, ai.askPrompt(question, chosen), chosen);
+      const history = (Array.isArray(body.history) ? body.history : [])
+        .slice(-2)
+        .map((t) => ({ q: String(t.q || '').slice(0, 300), a: String(t.a || '').slice(0, 600) }))
+        .filter((t) => t.q && t.a);
+      return answerQuestion(res, question, pickItems(items, body.ids), history, Boolean(body.general));
     }
 
     if (action === 'explain') {
