@@ -40,13 +40,10 @@ If none of the feeds can be fetched (for example when you're offline), Newsroll 
 
 ### Publishing a new version
 
-Bump `version` in `package.json`, then push a tag:
+1. Bump `version` in `package.json` (e.g. `0.2.0`) and push to `main`.
+2. On GitHub, go to **Actions → Build desktop app → Run workflow**.
 
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-GitHub Actions (`.github/workflows/release.yml`) builds the Mac, Windows and Linux installers and attaches them to a new release.
+This builds the Mac, Windows and Linux installers and publishes them as release `v0.2.0`. Pushing a `v*` tag does the same.
 
 ## Using it
 
