@@ -15,29 +15,35 @@ npm start
 # → http://localhost:3000
 ```
 
-If Ollama isn't running, the timeline still works and the AI pill in the header tells you what's missing. If none of the feeds can be fetched (for example when you're offline), Newsroll shows built-in sample stories so you can still try it out.
+If Ollama isn't running, the news still works and the Ask panel tells you what to run. If none of the feeds can be fetched (for example when you're offline), Newsroll shows built-in sample stories so you can still try it out.
 
-## Features
+## Install it as an app
 
-**Timeline**
-- One vertical timeline grouped by day and hour, with a "Now" marker at the top. Day headers stay pinned while you scroll.
-- Small headlines that expand smoothly to show the summary, image, source link and related stories.
-- Topic filter chips (Politics, World, Business, Tech, …).
-- Stories published since your last visit get a pulsing dot and a **New** tag.
-- Feeds refresh every 5 minutes. If you've scrolled down, a "N new stories" pill appears instead of the page jumping.
-- Keyboard shortcuts: `j` / `k` to move between stories, `Enter` to expand, `/` to jump to the question box.
+Newsroll is a Progressive Web App, so it installs with its own **N.** icon and window and opens even when you're offline.
 
-**AI (local, via Ollama)**
-- **Daily briefing**: a streamed summary of today, of everything *since your last visit*, or of the current topic.
-- **Summarize a day**: every day header on the timeline has a ✦ button that summarises just that day.
-- **Ask**: ask a question in plain language. Newsroll first picks the most relevant stories by keyword overlap, so a small model only has to read a few, and the answer cites them.
-- **Clickable citations**: `[2]`-style references in any AI answer become chips. Clicking one scrolls to that story, opens it and highlights it.
-- **Explain this**: each story can be expanded into *TL;DR / Why it matters / Watch for*.
-- **Suggested questions** built from the topics and names that keep coming up in the headlines.
-- **Related stories**: found instantly by keyword similarity, with no model call.
+- **Desktop (Chrome / Edge):** open `http://localhost:3000` and click the install icon in the address bar.
+- **iPhone / iPad (Safari):** Share → *Add to Home Screen*.
+- **Android (Chrome):** menu → *Install app*.
 
-**Animations**
-The interface is black and white with simple text; colour (a violet-to-teal accent) appears only on AI features — briefings, answers, citations and AI buttons. Cards rise in with a stagger as they scroll into view, and the timeline line fills with colour as you read down it. There's also a scroll progress bar, smooth expand and collapse, a typing cursor while answers stream, a "thinking" indicator, a highlight flash when you jump to a story and shimmer placeholders while loading. If your system is set to reduced motion, all of this is turned off.
+Browsers only allow installing from `localhost` or over HTTPS. To use it on your phone, put it behind HTTPS (for example with a reverse proxy or a tunnel).
+
+## Using it
+
+The screen has three parts:
+
+1. **Topics**: tap a chip to filter the timeline.
+2. **✦ Summary button**: one tap for an AI summary. It adapts to what's most useful: *Summarize today*, *Catch up on N new stories* (since your last visit) or *Summarize Tech* when a topic is selected.
+3. **The timeline**: stories grouped by day. Tap a headline to expand it, then use **✦ Explain** for a *TL;DR / Why it matters / Watch for* breakdown, or **Open story** for the original article. Each day also has a **✦ Summary** button.
+
+At the bottom there's an **Ask about the news** box. Type a question, or pick a suggested one, and the answer slides up with numbered citations. Tap a citation to jump to that story.
+
+**Design:** black and white with plain text. Colour (a violet-to-teal accent) only appears on AI features. The dot in the **N.** logo lights up while the AI is thinking.
+
+**Smart touches:** the Ask feature picks only the most relevant stories, so a small model like smollm2 stays accurate. Related stories and suggested questions are worked out instantly, with no model call. Stories that are new since your last visit are marked, and feeds refresh every 5 minutes. If you've scrolled down, a "N new stories" pill appears instead of the page jumping.
+
+**Animations:** stories rise in as you scroll, the timeline line fills as you read, stories expand smoothly, answers type out live and the Ask panel slides up. If your system is set to reduce motion, all of this is turned off.
+
+**Keyboard:** `j` / `k` move between stories, `Enter` expands one, `/` asks a question and `Esc` closes the panel.
 
 ## Configuration
 
@@ -61,7 +67,8 @@ lib/rss.js       Dependency-free RSS/Atom parser
 lib/topics.js    Keyword topic tagging
 lib/ai.js        Prompts, relevance ranking and Ollama streaming
 lib/sample.js    Offline sample stories
-public/          The front end (index.html, styles.css, app.js)
+public/          The app: index.html, styles.css, app.js, the service worker
+                 (sw.js), manifest and icons
 ```
 
 The server caches feeds for 5 minutes and keeps stories from the last 3 days. The AI endpoints build short, numbered prompts sized for small models, then stream Ollama's output straight to the browser. The IDs of the stories the model saw are sent in a response header, which is how the browser turns `[n]` into links.
