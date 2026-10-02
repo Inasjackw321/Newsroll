@@ -11,6 +11,7 @@ const { GROUP_ORDER, slug } = require('./lib/catalog');
 const settings = require('./lib/settings');
 const ai = require('./lib/ai');
 const { search } = require('./lib/search');
+const { rankImportance } = require('./lib/importance');
 const intent = require('./lib/intent');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -90,14 +91,20 @@ async function refresh() {
 
   // Merge, dropping exact duplicates and the same headline from several feeds.
   const seenIds = new Set();
-  const seenTitles = new Set();
+  const byTitle = new Map(); // headline → first item with it
+  const dupes = new Map(); // item id → identical headlines merged into it (from other outlets)
   let items = [];
   for (const src of srcs) {
     for (const item of lastGood.get(src.id) || []) {
       const key = titleKey(item.title);
-      if (seenIds.has(item.id) || seenTitles.has(key)) continue;
+      if (byTitle.has(key)) {
+        const first = byTitle.get(key);
+        if (first.source !== item.source) dupes.set(first.id, (dupes.get(first.id) || 0) + 1);
+        continue;
+      }
+      if (seenIds.has(item.id)) continue;
       seenIds.add(item.id);
-      seenTitles.add(key);
+      byTitle.set(key, item);
       items.push(item);
     }
   }
@@ -110,6 +117,7 @@ async function refresh() {
     .filter((it) => now - Date.parse(it.published) < MAX_AGE_MS && Date.parse(it.published) <= now + 3600e3)
     .sort((a, b) => Date.parse(b.published) - Date.parse(a.published))
     .slice(0, MAX_ITEMS);
+  items = rankImportance(items, dupes, now);
 
   const failed = srcs.filter((s) => status.get(s.id)?.ok === false).map((s) => s.name);
   cache = { items, fetchedAt: now, sample, sources: srcs.length, failed };
@@ -329,6 +337,15 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // ---- Variables (pinned trackers) ----
+  if (url.pathname === '/api/variables') {
+    if (req.method === 'GET') return sendJson(res, 200, { variables: settings.getVariables() });
+    if (req.method === 'PUT') {
+      const body = await readBody(req);
+      return sendJson(res, 200, { variables: settings.setVariables(body.variables) });
+    }
+  }
+
   // ---- AI model ----
   if (req.method === 'PUT' && url.pathname === '/api/ai/model') {
     const body = await readBody(req);
@@ -372,6 +389,12 @@ async function handleApi(req, res, url) {
         .map((t) => ({ q: String(t.q || '').slice(0, 300), a: String(t.a || '').slice(0, 600) }))
         .filter((t) => t.q && t.a);
       return answerQuestion(res, question, pickItems(items, body.ids), history, Boolean(body.general));
+    }
+
+    if (action === 'status') {
+      const chosen = pickItems(items, body.ids).slice(0, 8);
+      if (!chosen.length) return sendText(res, 'No recent reports.', 'direct');
+      return streamAi(null, res, ai.statusPrompt(chosen, String(body.name || 'this').slice(0, 60)), chosen, 'answer');
     }
 
     if (action === 'explain') {

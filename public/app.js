@@ -79,7 +79,15 @@
 
   function visibleItems() {
     let list = state.items;
-    if (state.topic === 'Telegram') list = list.filter((it) => it.type === 'telegram');
+    if (state.variable) {
+      const v = state.variables.find((x) => x.id === state.variable);
+      if (v) {
+        const compiled = compileVariable(v);
+        list = list.filter((it) => matchesVariable(compiled, it));
+      }
+    }
+    if (state.topic === 'Important') list = list.filter((it) => it.importance > 0);
+    else if (state.topic === 'Telegram') list = list.filter((it) => it.type === 'telegram');
     else if (state.topic !== 'all') list = list.filter((it) => it.topic === state.topic);
     const q = state.query.trim().toLowerCase();
     if (q) list = list.filter((it) => `${it.title} ${it.summary} ${it.source}`.toLowerCase().includes(q));
@@ -173,20 +181,29 @@
     for (const it of state.items) counts[it.topic] = (counts[it.topic] || 0) + 1;
     const topics = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
     const hasTelegram = state.items.some((it) => it.type === 'telegram');
-    if (state.topic !== 'all' && !counts[state.topic] && !(state.topic === 'Telegram' && hasTelegram)) state.topic = 'all';
-    $('#filters').innerHTML = ['all', ...(hasTelegram ? ['Telegram'] : []), ...topics]
-      .map((t) => `<button class="filter${state.topic === t ? ' active' : ''}" data-topic="${esc(t)}">${t === 'all' ? 'All' : esc(t)}</button>`)
+    const important = state.items.filter((it) => it.importance > 0).length;
+    const special = { Telegram: hasTelegram, Important: important > 0 };
+    if (state.topic !== 'all' && !counts[state.topic] && !special[state.topic]) state.topic = 'all';
+    $('#filters').innerHTML = ['all', ...(important ? ['Important'] : []), ...(hasTelegram ? ['Telegram'] : []), ...topics]
+      .map((t) => `<button class="filter${state.topic === t ? ' active' : ''}${t === 'Important' ? ' imp-filter' : ''}" data-topic="${esc(t)}">${t === 'all' ? 'All' : t === 'Important' ? `<span class="imp-dot"></span>Important <span class="n">${important}</span>` : esc(t)}</button>`)
       .join('');
+  }
+
+  function importanceBadge(it) {
+    if (it.breaking) return '<span class="imp breaking">Breaking</span> ';
+    if (it.importance === 2) return '<span class="imp major">Major</span> ';
+    if (it.importance === 1) return '<span class="imp">Important</span> ';
+    return '';
   }
 
   function itemHtml(it) {
     const t = ts(it);
     const fresh = state.prevVisit && t > state.prevVisit;
     return `
-      <article class="tl-item${fresh ? ' fresh' : ''}" data-id="${it.id}" tabindex="-1">
+      <article class="tl-item${fresh ? ' fresh' : ''}${it.importance ? ` imp-${it.importance}` : ''}${it.breaking ? ' breaking' : ''}" data-id="${it.id}" tabindex="-1">
         <span class="tl-dot"></span>
         <div class="tl-card" role="button" tabindex="0" aria-expanded="false">
-          <div class="tl-meta"><time datetime="${esc(it.published)}">${relTime(t)}</time> · ${esc(it.source)}${it.type === 'telegram' ? ' <span class="tg">Telegram</span>' : ''}${fresh ? ' · <b>New</b>' : ''}</div>
+          <div class="tl-meta">${importanceBadge(it)}<time datetime="${esc(it.published)}">${relTime(t)}</time> · ${esc(it.source)}${it.type === 'telegram' ? ' <span class="tg">Telegram</span>' : ''}${it.coverage >= 2 ? ` · <span title="Reported by ${it.coverage} outlets">${it.coverage} outlets</span>` : ''}${fresh ? ' · <b>New</b>' : ''}</div>
           <h3 class="tl-title">${esc(it.title)}</h3>
           <div class="tl-more"><div><div class="tl-more-inner"></div></div></div>
         </div>
@@ -197,7 +214,9 @@
     renderFilters();
     renderSuggestions();
     updateSummaryButton();
+    renderVariables();
     const list = visibleItems();
+    renderVarFilter(list.length);
     const body = $('#timelineBody');
     if (!list.length) {
       body.innerHTML = state.query
@@ -273,7 +292,13 @@
 
   function jumpTo(id) {
     const it = state.byId.get(id);
-    if (!it) return;
+    if (!it) {
+      // An older story from a saved chat that's no longer on the timeline.
+      const known = knownStories.get(id);
+      if (known?.link) window.open(known.link, '_blank', 'noopener');
+      return;
+    }
+    if (state.variable) setVariableFilter(null);
     closeSheet();
     if (state.topic !== 'all' && it.topic !== state.topic) setTopic('all');
     const el = $(`.tl-item[data-id="${id}"]`);
@@ -300,7 +325,7 @@
   function inline(text, sources) {
     return esc(text)
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\[(\d+(?:\s*[,&]\s*\d+)*)\]/g, (m, nums) =>
+      .replace(/\s*\[(\d+(?:\s*[,&]\s*\d+)*)\]/g, (m, nums) =>
         nums
           .split(/[,&]/)
           .map((n) => {
@@ -413,6 +438,8 @@
   // visit, or simply today.
   function summarySet() {
     const now = Date.now();
+    const v = state.variable && state.variables.find((x) => x.id === state.variable);
+    if (v) return { items: visibleItems(), label: `${v.name} news`, text: `Summarize ${v.name}` };
     if (state.topic !== 'all') return { items: visibleItems(), label: `${state.topic} news`, text: `Summarize ${state.topic}` };
     const fresh = state.prevVisit ? state.items.filter((i) => ts(i) > state.prevVisit) : [];
     if (fresh.length >= 3) return { items: fresh, label: `since ${relTime(state.prevVisit).toLowerCase()}`, text: `Catch up on ${fresh.length} new stories` };
@@ -434,10 +461,46 @@
     if (!aiReady()) return openSettings('ai');
     const box = $('#summaryBox');
     box.classList.remove('hidden');
-    streamInto($('.ai-output', box), 'summary', { ids: items.slice(0, 20).map((i) => i.id), label }, $('#summaryBtn'));
+    // Important stories first, then the newest.
+    const ranked = [...items].sort((a, b) => (b.importance || 0) - (a.importance || 0) || ts(b) - ts(a));
+    streamInto($('.ai-output', box), 'summary', { ids: ranked.slice(0, 20).map((i) => i.id), label }, $('#summaryBtn'));
   }
 
-  // ---------- Ask sheet ----------
+  // ---------- Ask: chat with saved conversations ----------
+  const CHATS_KEY = 'newsroll:chats';
+  const chats = loadChats();
+  const knownStories = new Map(); // story id → { title, source, link } for stories cited in saved chats
+
+  function loadChats() {
+    try {
+      const saved = JSON.parse(storage(CHATS_KEY) || 'null');
+      if (saved && Array.isArray(saved.list)) return saved;
+    } catch {
+      /* start fresh */
+    }
+    return { list: [], currentId: null };
+  }
+
+  function saveChats() {
+    // Keep the 30 most recent conversations, each up to 40 messages.
+    chats.list = chats.list.filter((c) => c.messages.length).slice(0, 30);
+    for (const c of chats.list) c.messages = c.messages.slice(-40);
+    storage(CHATS_KEY, JSON.stringify(chats));
+  }
+
+  function currentChat() {
+    let chat = chats.list.find((c) => c.id === chats.currentId);
+    if (!chat) {
+      chat = { id: `c${Date.now().toString(36)}`, messages: [], updated: Date.now() };
+      chats.list.unshift(chat);
+      chats.currentId = chat.id;
+    }
+    return chat;
+  }
+
+  const chatTitle = (chat) => chat.messages.find((m) => m.role === 'user')?.text || 'New chat';
+  const stripCites = (text) => text.replace(/\s*\[\d+(?:\s*[,&]\s*\d+)*\]/g, '');
+
   function openSheet() {
     const sheet = $('#sheet');
     if (sheet.classList.contains('open')) return;
@@ -445,6 +508,7 @@
     sheet.setAttribute('aria-hidden', 'false');
     $('#backdrop').classList.add('show');
     document.body.classList.add('sheet-open');
+    showChatView();
   }
 
   function closeSheet() {
@@ -455,53 +519,254 @@
     $('#askInput').blur();
   }
 
-  async function ask(question, { general = false } = {}) {
-    openSheet();
-    const thread = $('#thread');
-    // The last couple of answers go along so follow-ups ("why?") make sense.
-    const history = $$('.qa', thread)
-      .filter((e) => e.dataset.answer)
-      .slice(-2)
-      .map((e) => ({ q: e.dataset.q, a: e.dataset.answer }));
-    const entry = document.createElement('div');
-    entry.className = 'qa';
-    entry.innerHTML = `<p class="q">${esc(question)}${general ? ' <span class="tg">general knowledge</span>' : ''}</p><div class="ai-output"></div><div class="qa-after"></div>`;
-    thread.append(entry);
-    // Keep the thread short and focused.
-    while (thread.children.length > 4) thread.firstElementChild.remove();
-    entry.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    const ids = state.topic === 'all' ? [] : visibleItems().map((i) => i.id);
-    const out = $('.ai-output', entry);
-    const r = await streamInto(out, 'ask', { question, ids, history, general });
-    if (!r) return;
-    entry.dataset.q = question;
-    entry.dataset.answer = r.text.replace(/\s*\[\d+(?:\s*[,&]\s*\d+)*\]/g, '').slice(0, 600);
-    $('.qa-after', entry).innerHTML = afterAnswer(out, r, question);
-    entry.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  function showChatView() {
+    $('#historyView').classList.add('hidden');
+    $('#chatView').classList.remove('hidden');
+    $('#historyBtn').classList.remove('active');
+    renderThread();
   }
 
+  function newChat() {
+    if (!currentChat().messages.length) return showChatView();
+    chats.currentId = null;
+    currentChat();
+    saveChats();
+    showChatView();
+    $('#askInput').focus();
+  }
+
+  // Sources are stored with each answer so old chats still link up after the
+  // stories have scrolled off the timeline.
+  function sourceItems(msg) {
+    return (msg.sources || []).map((s) => state.byId.get(s.id) || s);
+  }
+
+  function aiMessageHtml(msg, i, isLast) {
+    const time = new Date(msg.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const canRetry = isLast && msg.question;
+    return `
+      <div class="msg ai" data-i="${i}">
+        <div class="avatar" aria-hidden="true">✦</div>
+        <div class="msg-body">
+          ${msg.general ? '<span class="tg">general knowledge</span>' : ''}
+          <div class="ai-output"></div>
+          <div class="qa-after"></div>
+          <div class="msg-actions">
+            <button class="msg-btn" data-copy="${i}">Copy</button>
+            ${canRetry ? `<button class="msg-btn" data-retry="${i}">Retry</button>` : ''}
+            <span class="muted">${time}</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderThread() {
+    const chat = currentChat();
+    const thread = $('#thread');
+    const last = chat.messages.length - 1;
+    thread.innerHTML = chat.messages
+      .map((m, i) => (m.role === 'user' ? `<div class="msg user"><div class="bubble">${esc(m.text)}</div></div>` : aiMessageHtml(m, i, i === last)))
+      .join('');
+    chat.messages.forEach((m, i) => {
+      if (m.role !== 'ai') return;
+      const el = $(`.msg.ai[data-i="${i}"]`, thread);
+      for (const s of m.sources || []) knownStories.set(s.id, s);
+      renderAi($('.ai-output', el), m.text, sourceItems(m));
+      $('.qa-after', el).innerHTML = afterAnswer($('.ai-output', el), m, i === last);
+    });
+    $('#chatEmpty').classList.toggle('hidden', chat.messages.length > 0);
+    $('#chatTitle').innerHTML = chat.messages.length
+      ? `<span class="spark">✦</span> ${esc(chatTitle(chat).slice(0, 40))}${chatTitle(chat).length > 40 ? '…' : ''}`
+      : '<span class="spark">✦</span> Ask';
+    scrollChatToEnd(false);
+  }
+
+  function scrollChatToEnd(smooth = true) {
+    const view = $('#chatView');
+    view.scrollTo({ top: view.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  async function ask(question, { general = false } = {}) {
+    openSheet();
+    showChatView();
+    const chat = currentChat();
+    // The last couple of answers go along so follow-ups ("why?") make sense.
+    const history = [];
+    for (let i = 0; i < chat.messages.length - 1; i++) {
+      const [q, a] = [chat.messages[i], chat.messages[i + 1]];
+      if (q.role === 'user' && a.role === 'ai' && a.mode !== 'direct') history.push({ q: q.text, a: stripCites(a.text).slice(0, 600) });
+    }
+    chat.messages.push({ role: 'user', text: question, at: Date.now() });
+    chat.updated = Date.now();
+    renderThread();
+
+    // Placeholder bubble that the reply streams into.
+    const thread = $('#thread');
+    thread.insertAdjacentHTML('beforeend', `<div class="msg ai streaming"><div class="avatar" aria-hidden="true">✦</div><div class="msg-body"><div class="ai-output"></div></div></div>`);
+    const pending = thread.lastElementChild;
+    scrollChatToEnd();
+    const ids = state.topic === 'all' ? [] : visibleItems().map((i) => i.id);
+    const follow = new MutationObserver(() => nearBottom() && scrollChatToEnd(false));
+    follow.observe(pending, { childList: true, subtree: true, characterData: true });
+    const r = await streamInto($('.ai-output', pending), 'ask', { question, ids, history: history.slice(-2), general });
+    follow.disconnect();
+    if (!r) {
+      pending.classList.remove('streaming');
+      return;
+    }
+    chat.messages.push({
+      role: 'ai',
+      text: r.text,
+      mode: r.mode,
+      groups: r.groups,
+      general,
+      question,
+      at: Date.now(),
+      sources: r.sources.map((s) => ({ id: s.id, title: s.title, source: s.source, link: s.link })),
+    });
+    chat.updated = Date.now();
+    saveChats();
+    renderThread();
+    scrollChatToEnd();
+  }
+
+  const nearBottom = () => {
+    const v = $('#chatView');
+    return v.scrollHeight - v.scrollTop - v.clientHeight < 120;
+  };
+
   // What to show under an answer: its sources, or ways forward if nothing was found.
-  function afterAnswer(out, r, question) {
-    const notFound = r.mode === 'notfound' || (r.mode === 'answer' && /couldn['’]t find|don['’]t cover|no (story|stories) (answer|mention)/i.test(r.text));
+  function afterAnswer(out, msg, isLast) {
+    const notFound = msg.mode === 'notfound' || (msg.mode === 'answer' && /couldn['’]t find|don['’]t cover|no (story|stories) (answer|mention)/i.test(msg.text));
     if (notFound) {
       $$('.cite', out).forEach((c) => c.remove()); // a "not found" reply shouldn't cite anything
-      const groupBtns = r.groups
+      if (!isLast) return '';
+      const groupBtns = (msg.groups || [])
         .map((g) => `<button class="pill-btn" data-open-group="${esc(g)}">Turn on ${esc(g)} sources</button>`)
         .join('');
-      return `<div class="qa-actions">${groupBtns}<button class="pill-btn ai" data-ask-general="${esc(question)}"><span class="spark">✦</span> Ask the AI anyway</button></div>
+      return `<div class="qa-actions">${groupBtns}<button class="pill-btn ai" data-ask-general="${esc(msg.question || '')}"><span class="spark">✦</span> Ask the AI anyway</button></div>
         <p class="qa-note">“Ask anyway” answers from the AI's own knowledge, which may be out of date.</p>`;
     }
-    if (r.mode === 'general') return '<p class="qa-note">From the AI\'s general knowledge, not your news. It may be out of date.</p>';
-    if (r.mode !== 'answer' || !r.sources.length) return '';
+    if (msg.general) return '<p class="qa-note">From the AI\'s general knowledge, not your news. It may be out of date.</p>';
+    if (msg.mode !== 'answer' || !msg.sources?.length) return '';
+
     // List the stories the answer cited, or the top matches if it cited none.
-    const cited = [...new Set([...r.text.matchAll(/\[(\d+(?:\s*[,&]\s*\d+)*)\]/g)].flatMap((m) => m[1].split(/[,&]/).map((n) => Number(n.trim()))))]
-      .map((n) => ({ n, it: r.sources[n - 1] }))
+    const items = sourceItems(msg);
+    const cited = [...new Set([...msg.text.matchAll(/\[(\d+(?:\s*[,&]\s*\d+)*)\]/g)].flatMap((m) => m[1].split(/[,&]/).map((n) => Number(n.trim()))))]
+      .map((n) => ({ n, it: items[n - 1] }))
       .filter((c) => c.it);
-    const list = cited.length ? cited : r.sources.slice(0, 3).map((it, i) => ({ n: i + 1, it }));
-    return `<div class="qa-sources"><span class="muted small">Sources</span>${list
-      .map(({ n, it }) => `<button data-jump="${it.id}"><span class="n">${n}</span>${esc(it.title)} <span class="muted">· ${esc(it.source)}</span></button>`)
-      .join('')}</div>`;
+    const list = cited.length ? cited : items.slice(0, 3).map((it, i) => ({ n: i + 1, it }));
+    const followUps = isLast
+      ? `<div class="follow-ups">${['Tell me more', 'Why does it matter?', 'What happens next?'].map((q) => `<button class="chip" data-follow="${q}">${q}</button>`).join('')}</div>`
+      : '';
+    return `<details class="qa-sources"${isLast ? ' open' : ''}><summary>${plural(list.length, 'source')}</summary>${list
+      .map(({ n, it }) => `<button data-jump="${it.id}"><span class="n">${n}</span><span>${esc(it.title)} <span class="muted">· ${esc(it.source)}</span></span></button>`)
+      .join('')}</details>${followUps}`;
   }
+
+  // ----- Past chats -----
+  function showHistory() {
+    $('#chatView').classList.add('hidden');
+    $('#historyView').classList.remove('hidden');
+    $('#historyBtn').classList.add('active');
+    $('#chatTitle').innerHTML = 'Past chats';
+    $('#historySearch').value = '';
+    renderHistory();
+    $('#historySearch').focus();
+  }
+
+  function renderHistory() {
+    const q = $('#historySearch').value.trim().toLowerCase();
+    const list = chats.list
+      .filter((c) => c.messages.length)
+      .filter((c) => !q || c.messages.some((m) => m.text.toLowerCase().includes(q)))
+      .sort((a, b) => b.updated - a.updated);
+    $('#historyList').innerHTML = list.length
+      ? list
+          .map((c) => {
+            const lastAi = [...c.messages].reverse().find((m) => m.role === 'ai');
+            const asks = c.messages.filter((m) => m.role === 'user').length;
+            return `
+              <div class="hist-row${c.id === chats.currentId ? ' current' : ''}" data-chat="${c.id}" role="button" tabindex="0">
+                <div class="hist-main">
+                  <div class="hist-title">${esc(chatTitle(c))}</div>
+                  <div class="hist-preview muted">${esc(stripCites(lastAi?.text || '').slice(0, 110))}</div>
+                </div>
+                <div class="hist-meta muted">${relTime(c.updated)}<br>${plural(asks, 'question')}</div>
+                <button class="close-btn hist-del" data-del-chat="${c.id}" aria-label="Delete chat">×</button>
+              </div>`;
+          })
+          .join('') + '<button class="link-btn hist-clear" id="clearChats">Delete all chats</button>'
+      : `<p class="muted">${q ? `No chats mention “${esc(q)}”.` : 'No past chats yet.'}</p>`;
+  }
+
+  $('#historySearch').addEventListener('input', renderHistory);
+  $('#historyList').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-del-chat]');
+    if (del) {
+      chats.list = chats.list.filter((c) => c.id !== del.dataset.delChat);
+      if (chats.currentId === del.dataset.delChat) chats.currentId = null;
+      saveChats();
+      return renderHistory();
+    }
+    if (e.target.closest('#clearChats')) {
+      if (!confirm('Delete all past chats?')) return;
+      chats.list = [];
+      chats.currentId = null;
+      saveChats();
+      return renderHistory();
+    }
+    const row = e.target.closest('[data-chat]');
+    if (row) {
+      chats.currentId = row.dataset.chat;
+      showChatView();
+    }
+  });
+
+  $('#thread').addEventListener('click', async (e) => {
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+      const msg = currentChat().messages[Number(copy.dataset.copy)];
+      try {
+        await navigator.clipboard.writeText(stripCites(msg.text));
+        copy.textContent = 'Copied';
+      } catch {
+        copy.textContent = 'Copy failed';
+      }
+      setTimeout(() => (copy.textContent = 'Copy'), 1500);
+      return;
+    }
+    const retry = e.target.closest('[data-retry]');
+    if (retry) {
+      const chat = currentChat();
+      const i = Number(retry.dataset.retry);
+      const { question, general } = chat.messages[i];
+      chat.messages.splice(i - 1, 2); // drop the question and answer, then ask again
+      return ask(question, { general });
+    }
+    const follow = e.target.closest('[data-follow]');
+    if (follow) return ask(follow.dataset.follow);
+  });
+
+  $('#chatView').addEventListener('scroll', () => $('#jumpLatest').classList.toggle('hidden', nearBottom()), { passive: true });
+  $('#jumpLatest').addEventListener('click', () => scrollChatToEnd());
+  $('#historyBtn').addEventListener('click', () => ($('#historyView').classList.contains('hidden') ? showHistory() : showChatView()));
+  $('#newChatBtn').addEventListener('click', newChat);
+
+  // Rainbow highlight while typing to the AI.
+  const updateTyping = () => $('#askForm').classList.toggle('typing', document.activeElement === $('#askInput') && $('#askInput').value.length > 0);
+  $('#askInput').addEventListener('input', updateTyping);
+  $('#askInput').addEventListener('blur', updateTyping);
+  // ↑ in the empty box brings back your last question.
+  $('#askInput').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' || e.target.value) return;
+    const lastQ = [...currentChat().messages].reverse().find((m) => m.role === 'user');
+    if (lastQ) {
+      e.preventDefault();
+      e.target.value = lastQ.text;
+      updateTyping();
+    }
+  });
 
   // ---------- AI status ----------
   let statusTimer;
@@ -560,6 +825,8 @@
     const filter = e.target.closest('.filter');
     if (filter) return setTopic(filter.dataset.topic);
 
+    if (e.target.closest('[data-clear-var]')) return setVariableFilter(null);
+
     const groupBtn = e.target.closest('[data-open-group]');
     if (groupBtn) return openSettings('sources', groupBtn.dataset.openGroup);
     const general = e.target.closest('[data-ask-general]');
@@ -602,7 +869,9 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (!$('#varModal').classList.contains('hidden')) return closeVarModal();
       if ($('#settings').classList.contains('open')) return closeSettings();
+      if ($('#sheet').classList.contains('open') && !$('#historyView').classList.contains('hidden')) return showChatView();
       if ($('#sheet').classList.contains('open')) return closeSheet();
       if (!$('#searchbar').classList.contains('hidden')) return closeSearch();
     }
@@ -1003,11 +1272,252 @@
   // Lets the desktop app's menu open these screens.
   window.newsroll = { openSettings };
 
+  // ---------- Variables: pinned trackers ----------
+  // Each variable has keywords; a story matches if it contains every word of
+  // any one keyword (so "rate cut" needs both words, "drone, uav" needs either).
+  const PRESETS = [
+    { name: 'Drone strikes', keywords: ['drone', 'uav', 'shahed', 'unmanned aerial'] },
+    { name: 'Missile launches', keywords: ['missile', 'ballistic', 'icbm', 'rocket fire'] },
+    { name: 'Earthquakes', keywords: ['earthquake', 'quake', 'tremor', 'seismic'] },
+    { name: 'Wildfires', keywords: ['wildfire', 'bushfire', 'forest fire'] },
+    { name: 'Storms', keywords: ['hurricane', 'typhoon', 'cyclone', 'tropical storm', 'tornado'] },
+    { name: 'Ceasefire talks', keywords: ['ceasefire', 'truce', 'peace talk'] },
+    { name: 'Interest rates', keywords: ['interest rate', 'rate cut', 'rate hike', 'federal reserve', 'central bank'] },
+    { name: 'Bitcoin', keywords: ['bitcoin', 'btc', 'crypto'] },
+    { name: 'AI', keywords: ['ai', 'artificial intelligence', 'openai', 'chatgpt', 'anthropic'] },
+    { name: 'Elections', keywords: ['election', 'ballot', 'vote count', 'polling station'] },
+    { name: 'Protests', keywords: ['protest', 'protester', 'demonstrator', 'riot'] },
+    { name: 'Cyberattacks', keywords: ['cyberattack', 'ransomware', 'data breach', 'hacker'] },
+    { name: 'Space launches', keywords: ['spacex', 'starship', 'rocket launch', 'nasa launch'] },
+    { name: 'Layoffs', keywords: ['layoff', 'job cut', 'redundancy'] },
+  ];
+
+  state.variables = [];
+  state.variable = null; // id of the variable filtering the timeline
+
+  // Same light stemming as the server's search, so "drones" matches "drone".
+  function stemWord(w) {
+    if (w.length <= 3) return w;
+    if (w.endsWith('ies') && w.length > 4) return w.slice(0, -3) + 'y';
+    if (/(ss|us|is)$/.test(w)) return w;
+    if (/(ches|shes|sses|xes|zes)$/.test(w)) return w.slice(0, -2);
+    if (w.endsWith('s')) return w.slice(0, -1);
+    if (w.endsWith('ing') && w.length > 5) return w.slice(0, -3);
+    if (w.endsWith('ed') && w.length > 4) return w.slice(0, -2);
+    return w;
+  }
+  const stems = (text) => (String(text).toLowerCase().match(/[a-z0-9]+/g) || []).map(stemWord);
+  const stemCache = new Map();
+  function storyStems(it) {
+    if (!stemCache.has(it.id)) stemCache.set(it.id, new Set(stems(`${it.title} ${it.summary || ''}`)));
+    return stemCache.get(it.id);
+  }
+
+  function compileVariable(v) {
+    return v.keywords.map((k) => stems(k)).filter((ws) => ws.length);
+  }
+  function matchesVariable(compiled, it) {
+    const set = storyStems(it);
+    return compiled.some((ws) => ws.every((w) => set.has(w)));
+  }
+  const variableItems = (v) => {
+    const compiled = compileVariable(v);
+    return state.items.filter((it) => matchesVariable(compiled, it));
+  };
+
+  function variableStats(v) {
+    const now = Date.now();
+    const matches = variableItems(v);
+    const age = (it) => (now - ts(it)) / 3600e3;
+    const day = matches.filter((it) => age(it) < 24);
+    const prev = matches.filter((it) => age(it) >= 24 && age(it) < 48);
+    // 24 bars of two hours each, covering the last 48 hours (oldest first).
+    const bars = Array(24).fill(0);
+    for (const it of matches) {
+      const slot = Math.floor(age(it) / 2);
+      if (slot >= 0 && slot < 24) bars[23 - slot]++;
+    }
+    const spiking = day.length >= 3 && day.length >= prev.length * 2;
+    return { matches, day: day.length, prev: prev.length, bars, latest: matches[0], spiking, important: matches.some((it) => it.importance > 0 && age(it) < 24) };
+  }
+
+  function sparkline(bars) {
+    const max = Math.max(1, ...bars);
+    const w = 3;
+    const gap = 1;
+    return `<svg class="spark-bars" viewBox="0 0 ${bars.length * (w + gap)} 20" preserveAspectRatio="none" aria-hidden="true">${bars
+      .map((b, i) => {
+        const h = b ? Math.max(2, (b / max) * 20) : 1;
+        return `<rect x="${i * (w + gap)}" y="${20 - h}" width="${w}" height="${h}" rx="1" class="${i >= 12 ? 'recent' : ''}"/>`;
+      })
+      .join('')}</svg>`;
+  }
+
+  function renderVariables() {
+    const el = $('#vars');
+    if (!state.variables.length) {
+      el.innerHTML = `
+        <div class="vars-empty">
+          <div><b>Pin a variable</b> <span class="muted">to track something across all your news, e.g.</span></div>
+          <div class="preset-chips">${PRESETS.slice(0, 5).map((p) => `<button class="chip" data-preset="${esc(p.name)}">+ ${esc(p.name)}</button>`).join('')}<button class="chip" data-add-var>+ Your own…</button></div>
+        </div>`;
+      return;
+    }
+    el.innerHTML =
+      state.variables
+        .map((v) => {
+          const s = variableStats(v);
+          const delta = s.day - s.prev;
+          const badge = s.spiking || s.important;
+          const deltaText = delta === 0 ? 'same as yesterday' : `${delta > 0 ? '▲' : '▼'} ${Math.abs(delta)}${badge ? '' : ' vs yesterday'}`;
+          const deltaHtml = `<span class="var-delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}" title="${s.day} in the last 24h, ${s.prev} the day before">${deltaText}</span>`;
+          return `
+            <div class="var-card${state.variable === v.id ? ' active' : ''}${s.spiking ? ' spiking' : ''}" data-var="${v.id}" role="button" tabindex="0" title="Show these stories">
+              <div class="var-top">
+                <span class="var-name">${esc(v.name)}</span>
+                <button class="var-x" data-del-var="${v.id}" aria-label="Unpin ${esc(v.name)}" title="Unpin">×</button>
+              </div>
+              <div class="var-mid">
+                <span class="var-count">${s.day}</span>
+                <span class="var-unit">${s.day === 1 ? 'report' : 'reports'}<br>last 24h</span>
+                ${sparkline(s.bars)}
+              </div>
+              <div class="var-foot">${s.spiking ? '<span class="imp breaking">Spiking</span>' : s.important ? '<span class="imp">Important</span>' : ''}${deltaHtml}<button class="var-ai" data-var-ai="${v.id}" title="AI status update" aria-label="AI status for ${esc(v.name)}">✦</button></div>
+              <div class="var-latest">${s.latest ? `<span class="muted">${relTime(ts(s.latest))}</span> ${esc(s.latest.title)}` : '<span class="muted">No reports yet</span>'}</div>
+            </div>`;
+        })
+        .join('') + '<button class="var-add" data-add-var aria-label="Pin a variable"><span>+</span>Pin</button>';
+  }
+
+  async function loadVariables() {
+    try {
+      state.variables = (await (await fetch('/api/variables')).json()).variables || [];
+    } catch {
+      state.variables = [];
+    }
+    renderVariables();
+  }
+
+  async function saveVariables() {
+    renderVariables();
+    await fetch('/api/variables', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ variables: state.variables }) });
+  }
+
+  function addVariable(v) {
+    const existing = state.variables.find((x) => x.name.toLowerCase() === v.name.toLowerCase());
+    if (existing) existing.keywords = v.keywords;
+    else state.variables.push({ id: `v${Date.now().toString(36)}`, ...v });
+    saveVariables();
+  }
+
+  function setVariableFilter(id) {
+    state.variable = state.variable === id ? null : id;
+    renderVariables();
+    render();
+    if (state.variable) window.scrollTo({ top: $('#filters').offsetTop - 70, behavior: 'smooth' });
+  }
+
+  function renderVarFilter(count) {
+    const v = state.variables.find((x) => x.id === state.variable);
+    const bar = $('#varFilter');
+    bar.classList.toggle('hidden', !v);
+    if (v) bar.innerHTML = `Showing <b>${esc(v.name)}</b> · ${plural(count, 'story', 'stories')} <button class="link-btn" data-clear-var>Show all</button>`;
+  }
+
+  // ----- Pin dialog -----
+  function openVarModal(preset) {
+    const modal = $('#varModal');
+    modal.classList.remove('hidden');
+    $('#varPresets').innerHTML = PRESETS.filter((p) => !state.variables.some((v) => v.name === p.name))
+      .map((p) => `<button type="button" class="chip" data-fill-preset="${esc(p.name)}">${esc(p.name)}</button>`)
+      .join('');
+    $('#varName').value = preset?.name || '';
+    $('#varKeywords').value = preset ? preset.keywords.join(', ') : '';
+    updateVarPreview();
+    $('#varName').focus();
+  }
+  const closeVarModal = () => $('#varModal').classList.add('hidden');
+
+  function formVariable() {
+    const name = $('#varName').value.trim();
+    const keywords = ($('#varKeywords').value.trim() || name).split(',').map((k) => k.trim().toLowerCase()).filter(Boolean);
+    return { name, keywords };
+  }
+
+  function updateVarPreview() {
+    const v = formVariable();
+    const preview = $('#varPreview');
+    if (!v.name) {
+      preview.textContent = 'Tip: a keyword with several words needs all of them, e.g. “rate cut”.';
+      return;
+    }
+    const s = variableStats(v);
+    preview.innerHTML = `Matches <b>${plural(s.day, 'story', 'stories')}</b> in the last 24 hours${s.latest ? `, latest: “${esc(s.latest.title.slice(0, 70))}”` : ''}.`;
+  }
+
+  $('#varName').addEventListener('input', updateVarPreview);
+  $('#varKeywords').addEventListener('input', updateVarPreview);
+  $('#varCancel').addEventListener('click', closeVarModal);
+  $('#varModal').addEventListener('click', (e) => {
+    if (e.target.id === 'varModal') return closeVarModal();
+    const fill = e.target.closest('[data-fill-preset]');
+    if (fill) {
+      const p = PRESETS.find((x) => x.name === fill.dataset.fillPreset);
+      $('#varName').value = p.name;
+      $('#varKeywords').value = p.keywords.join(', ');
+      updateVarPreview();
+    }
+  });
+  $('#varForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = formVariable();
+    if (!v.name) return;
+    addVariable(v);
+    closeVarModal();
+  });
+
+  $('#vars').addEventListener('click', (e) => {
+    const preset = e.target.closest('[data-preset]');
+    if (preset) return addVariable(PRESETS.find((p) => p.name === preset.dataset.preset));
+    if (e.target.closest('[data-add-var]')) return openVarModal();
+    const del = e.target.closest('[data-del-var]');
+    if (del) {
+      e.stopPropagation();
+      state.variables = state.variables.filter((v) => v.id !== del.dataset.delVar);
+      if (state.variable === del.dataset.delVar) setVariableFilter(null);
+      return saveVariables();
+    }
+    const aiBtn = e.target.closest('[data-var-ai]');
+    if (aiBtn) {
+      e.stopPropagation();
+      const v = state.variables.find((x) => x.id === aiBtn.dataset.varAi);
+      if (!aiReady()) return openSettings('ai');
+      const box = $('#varStatus');
+      box.classList.remove('hidden');
+      $('#varStatusTitle').innerHTML = `<span class="spark">✦</span> ${esc(v.name)} — latest`;
+      const ids = variableStats(v).matches.slice(0, 8).map((it) => it.id);
+      return streamInto($('.ai-output', box), 'status', { ids, name: v.name }, aiBtn);
+    }
+    const card = e.target.closest('[data-var]');
+    if (card) setVariableFilter(card.dataset.var);
+  });
+  $('#vars').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-var]')) {
+      e.preventDefault();
+      setVariableFilter(e.target.dataset.var);
+    }
+  });
+  $('#varStatusClose').addEventListener('click', () => {
+    streams.get($('#varStatus .ai-output'))?.abort();
+    $('#varStatus').classList.add('hidden');
+  });
+
   // ---------- Boot ----------
   renderMasthead();
   const sk = $('#skeletonTpl');
   $('#timelineBody').append(...Array.from({ length: 6 }, () => sk.content.cloneNode(true)));
 
+  loadVariables();
   loadFeed({ initial: true }).then(() => storage(VISIT_KEY, String(Date.now())));
   checkAi();
   setInterval(() => loadFeed(), REFRESH_MS);

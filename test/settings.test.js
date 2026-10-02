@@ -43,3 +43,14 @@ test('remembers the chosen AI model', () => {
   settings.reset();
   assert.strictEqual(settings.getModel(), 'llama3.2');
 });
+
+test('saves pinned variables and drops invalid ones', () => {
+  const saved = settings.setVariables([
+    { id: 'v1', name: 'Drone strikes', keywords: ['Drone', ' UAV '] },
+    { name: '', keywords: ['x'] },
+    { name: 'No keywords', keywords: [] },
+  ]);
+  assert.deepStrictEqual(saved, [{ id: 'v1', name: 'Drone strikes', keywords: ['drone', 'uav'] }]);
+  settings.reset();
+  assert.deepStrictEqual(settings.getVariables(), saved);
+});
