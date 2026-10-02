@@ -1,6 +1,6 @@
 // Service worker: lets Newsroll install as an app and open offline.
 // Network first (so updates show straight away), falling back to the cache.
-const CACHE = 'newsroll-v1';
+const CACHE = 'newsroll-v2';
 const SHELL = ['/', '/styles.css', '/app.js', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

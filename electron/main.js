@@ -47,16 +47,6 @@ async function ensureOllama() {
   }
 }
 
-// Keep an editable copy of the news sources in the user's data folder.
-function feedsFile() {
-  const file = path.join(app.getPath('userData'), 'feeds.json');
-  if (!fs.existsSync(file)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.copyFileSync(path.join(__dirname, '..', 'feeds.json'), file);
-  }
-  return file;
-}
-
 // ---------- Window size memory ----------
 const stateFile = () => path.join(app.getPath('userData'), 'window.json');
 function loadBounds() {
@@ -114,7 +104,7 @@ function createWindow() {
   });
 }
 
-function buildMenu(feeds) {
+function buildMenu() {
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
     {
@@ -123,7 +113,8 @@ function buildMenu(feeds) {
         { label: 'Refresh News', accelerator: 'CmdOrCtrl+R', click: () => win?.webContents.executeJavaScript("document.getElementById('refreshBtn').click()") },
         { label: 'Ask a Question', accelerator: 'CmdOrCtrl+K', click: () => win?.webContents.executeJavaScript("document.getElementById('askInput').focus()") },
         { type: 'separator' },
-        { label: 'Edit News Sources…', click: () => shell.openPath(feeds) },
+        { label: 'News Sources…', accelerator: 'CmdOrCtrl+,', click: () => win?.webContents.executeJavaScript("window.newsroll?.openSettings('sources')") },
+        { label: 'AI Model…', click: () => win?.webContents.executeJavaScript("window.newsroll?.openSettings('ai')") },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
@@ -140,15 +131,14 @@ function buildMenu(feeds) {
 }
 
 app.whenReady().then(async () => {
-  const feeds = feedsFile();
-  process.env.NEWSROLL_FEEDS = feeds;
+  process.env.NEWSROLL_DATA = app.getPath('userData');
   await ensureOllama();
 
   const { start } = require('../server');
   const port = await start(PREFERRED_PORT);
   baseUrl = `http://127.0.0.1:${port}/`;
 
-  buildMenu(feeds);
+  buildMenu();
   createWindow();
 
   app.on('activate', () => {

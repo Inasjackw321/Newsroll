@@ -1,7 +1,7 @@
 {
   "name": "newsroll",
-  "version": "0.1.0",
-  "description": "A minimal RSS news timeline with local AI briefings and Q&A powered by Ollama",
+  "version": "0.2.0",
+  "description": "A simple news timeline (RSS + Telegram) with local AI summaries and answers powered by Ollama",
   "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
@@ -30,7 +30,6 @@
     },
     "files": [
       "server.js",
-      "feeds.json",
       "lib/**",
       "public/**",
       "electron/**",

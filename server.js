@@ -1,18 +1,23 @@
-// Newsroll: a tiny RSS timeline server with local AI features via Ollama.
-// No dependencies — just Node 18+.
+// Newsroll: a tiny news timeline server (RSS + Telegram) with local AI via Ollama.
+// No runtime dependencies — just Node 18+.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { parseFeed } = require('./lib/rss');
+const { parseTelegram, channelName, previewUrl } = require('./lib/telegram');
 const { tagTopic } = require('./lib/topics');
 const { sampleItems } = require('./lib/sample');
+const { GROUP_ORDER, slug } = require('./lib/catalog');
+const settings = require('./lib/settings');
 const ai = require('./lib/ai');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const CACHE_MS = 5 * 60 * 1000;
-const MAX_AGE_MS = 3 * 24 * 3600 * 1000;
-const MAX_ITEMS = 250;
+const MAX_AGE_MS = 2 * 24 * 3600 * 1000;
+const MAX_ITEMS = 800;
+const CONCURRENCY = 12;
+const UA = 'Mozilla/5.0 (compatible; Newsroll/0.2; +https://github.com/Inasjackw321/Newsroll)';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -24,54 +29,88 @@ const MIME = {
   '.png': 'image/png',
 };
 
-let cache = { items: [], fetchedAt: 0, errors: [], sample: false };
+let cache = { items: [], fetchedAt: 0, sample: false, sources: 0, failed: [] };
 let inflight = null;
+const status = new Map(); // source id -> { ok, count, error, checkedAt }
+const lastGood = new Map(); // source id -> items from the last successful fetch
 
-// The desktop app points NEWSROLL_FEEDS at an editable copy in the user's data folder.
-function loadFeeds() {
-  const file = process.env.NEWSROLL_FEEDS || path.join(__dirname, 'feeds.json');
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-async function fetchFeed(feed) {
-  const res = await fetch(feed.url, {
-    headers: { 'User-Agent': 'Newsroll/0.1 (+https://github.com/inasjackw321/newsroll)', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
+async function get(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8' },
     signal: AbortSignal.timeout(10000),
+    redirect: 'follow',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return parseFeed(await res.text(), feed.name);
+  return res.text();
 }
 
+async function fetchSource(src) {
+  const items = src.type === 'telegram'
+    ? parseTelegram(await get(previewUrl(src.url)), src.url)
+    : parseFeed(await get(src.url), src.name);
+  return items.map((it) => ({ ...it, source: src.name || it.source, sourceId: src.id, type: src.type }));
+}
+
+// Runs fn over items with at most `limit` in flight.
+async function mapLimit(list, limit, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < list.length) {
+      const i = next++;
+      try {
+        out[i] = { ok: true, value: await fn(list[i]) };
+      } catch (err) {
+        out[i] = { ok: false, error: err.cause?.code || err.cause?.message || err.message || String(err) };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, worker));
+  return out;
+}
+
+const titleKey = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
 async function refresh() {
-  const feeds = loadFeeds();
-  const results = await Promise.allSettled(feeds.map(fetchFeed));
-  const errors = [];
-  const seen = new Set();
-  let items = [];
+  const srcs = settings.enabledSources();
+  const results = await mapLimit(srcs, CONCURRENCY, fetchSource);
+  const now = Date.now();
 
   results.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      errors.push({ feed: feeds[i].name, error: r.reason?.cause?.message || r.reason?.message || String(r.reason) });
-      return;
-    }
-    for (const item of r.value) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      items.push(item);
+    const src = srcs[i];
+    if (r.ok) {
+      lastGood.set(src.id, r.value);
+      status.set(src.id, { ok: true, count: r.value.length, checkedAt: now });
+    } else {
+      status.set(src.id, { ok: false, error: r.error, count: lastGood.get(src.id)?.length || 0, checkedAt: now });
     }
   });
 
-  const sample = items.length === 0;
+  // Merge, dropping exact duplicates and the same headline from several feeds.
+  const seenIds = new Set();
+  const seenTitles = new Set();
+  let items = [];
+  for (const src of srcs) {
+    for (const item of lastGood.get(src.id) || []) {
+      const key = titleKey(item.title);
+      if (seenIds.has(item.id) || seenTitles.has(key)) continue;
+      seenIds.add(item.id);
+      seenTitles.add(key);
+      items.push(item);
+    }
+  }
+
+  const sample = items.length === 0 && srcs.length > 0;
   if (sample) items = sampleItems();
 
-  const now = Date.now();
   items = items
     .map((it) => ({ ...it, published: it.published || new Date(now).toISOString(), topic: tagTopic(it) }))
     .filter((it) => now - Date.parse(it.published) < MAX_AGE_MS && Date.parse(it.published) <= now + 3600e3)
     .sort((a, b) => Date.parse(b.published) - Date.parse(a.published))
     .slice(0, MAX_ITEMS);
 
-  cache = { items, fetchedAt: now, errors, sample, feeds: feeds.map((f) => f.name) };
+  const failed = srcs.filter((s) => status.get(s.id)?.ok === false).map((s) => s.name);
+  cache = { items, fetchedAt: now, sample, sources: srcs.length, failed };
   return cache;
 }
 
@@ -79,6 +118,59 @@ async function getItems(force = false) {
   if (!force && cache.fetchedAt && Date.now() - cache.fetchedAt < CACHE_MS) return cache;
   if (!inflight) inflight = refresh().finally(() => (inflight = null));
   return inflight;
+}
+
+function sourcesWithStatus() {
+  return settings.sources().map((s) => ({ ...s, status: status.get(s.id) || null }));
+}
+
+// Finds the RSS/Atom feed a web page advertises, e.g. for "https://example.com".
+function discoverFeed(html, base) {
+  const link = html.match(/<link[^>]+type=["']application\/(?:rss|atom)\+xml["'][^>]*>/i)?.[0];
+  const href = link?.match(/href=["']([^"']+)["']/i)?.[1];
+  return href ? new URL(href.replace(/&amp;/g, '&'), base).toString() : null;
+}
+
+// Works out what the user pasted: a Telegram channel, a feed, or a website.
+async function resolveSource(input) {
+  const raw = String(input || '').trim();
+  if (!raw) throw new Error('Paste a website, RSS link or Telegram channel.');
+
+  if (/t\.me\/|telegram\.me\/|^@/.test(raw) || (!/[./]/.test(raw) && channelName(raw))) {
+    const name = channelName(raw);
+    if (!name) throw new Error("That doesn't look like a Telegram channel name.");
+    const src = { id: `tg-${name.toLowerCase()}`, name: `@${name}`, url: name, type: 'telegram' };
+    try {
+      const items = parseTelegram(await get(previewUrl(name)), name);
+      if (items[0]) src.name = items[0].source;
+      return { src, warning: items.length ? null : 'No public posts found. Is the channel public?' };
+    } catch (err) {
+      return { src, warning: `Couldn't reach Telegram right now (${err.message}). It will keep trying.` };
+    }
+  }
+
+  let url;
+  try {
+    url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).toString();
+  } catch {
+    throw new Error("That doesn't look like a web address.");
+  }
+  const src = { id: `custom-${slug(url).slice(0, 60)}`, name: new URL(url).hostname.replace(/^www\./, ''), url, type: 'rss' };
+  try {
+    const body = await get(url);
+    let items = parseFeed(body);
+    if (!items.length) {
+      const feed = discoverFeed(body, url);
+      if (!feed) return { src, warning: "That page doesn't seem to have a news feed. Try its RSS link instead." };
+      src.url = feed;
+      src.id = `custom-${slug(feed).slice(0, 60)}`;
+      items = parseFeed(await get(feed));
+    }
+    if (items[0]?.source && items[0].source !== 'Unknown') src.name = items[0].source;
+    return { src, warning: items.length ? null : 'The feed loaded but has no stories yet.' };
+  } catch (err) {
+    return { src, warning: `Couldn't load it right now (${err.message}). It will keep trying.` };
+  }
 }
 
 function sendJson(res, status, data) {
@@ -120,12 +212,21 @@ async function streamAi(req, res, messages, sources = []) {
   } catch (err) {
     if (!controller.signal.aborted) {
       const hint = /fetch failed|ECONNREFUSED/i.test(err.message + (err.cause?.message || ''))
-        ? `Ollama isn't reachable. Start it with "ollama serve" and run "ollama pull ${process.env.OLLAMA_MODEL || 'smollm2'}".`
+        ? `The AI isn't running. Open Settings → AI to set it up.`
         : err.message;
       res.write(`\n\n⚠️ ${hint}`);
     }
   }
   res.end();
+}
+
+// Up to `limit` stories, at most two per source, so one busy feed can't
+// dominate a summary.
+function diverse(items, limit) {
+  const perSource = {};
+  const first = items.filter((it) => (perSource[it.source] = (perSource[it.source] || 0) + 1) <= 2);
+  const rest = items.filter((it) => !first.includes(it));
+  return [...first, ...rest].slice(0, limit);
 }
 
 function pickItems(items, ids) {
@@ -144,13 +245,66 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, await ai.status());
   }
 
+  // ---- Sources ----
+  if (url.pathname === '/api/sources') {
+    if (req.method === 'GET') return sendJson(res, 200, { groups: GROUP_ORDER, sources: sourcesWithStatus() });
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const { src, warning } = await resolveSource(body.input);
+        const added = settings.addCustom(src);
+        cache.fetchedAt = 0;
+        return sendJson(res, 200, { source: added, warning });
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message });
+      }
+    }
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      settings.setEnabled(ids, body.enabled);
+      cache.fetchedAt = 0; // pick up the change on the next load
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+  const del = url.pathname.match(/^\/api\/sources\/([\w-]+)$/);
+  if (del && req.method === 'DELETE') {
+    settings.removeCustom(del[1]);
+    cache.fetchedAt = 0;
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // ---- AI model ----
+  if (req.method === 'PUT' && url.pathname === '/api/ai/model') {
+    const body = await readBody(req);
+    if (!body.model) return sendJson(res, 400, { error: 'model is required' });
+    settings.setModel(body.model);
+    return sendJson(res, 200, await ai.status());
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/ai/pull') {
+    const body = await readBody(req);
+    const model = String(body.model || '').trim();
+    if (!/^[\w.:/-]{1,100}$/.test(model)) return sendJson(res, 400, { error: 'Invalid model name' });
+    const controller = new AbortController();
+    res.on('close', () => controller.abort());
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+    try {
+      await ai.pullModel(model, (p) => res.write(JSON.stringify({ status: p.status, completed: p.completed, total: p.total }) + '\n'), controller.signal);
+      res.write(JSON.stringify({ status: 'success', done: true }) + '\n');
+    } catch (err) {
+      if (!controller.signal.aborted) res.write(JSON.stringify({ error: /fetch failed|ECONNREFUSED/i.test(err.message) ? "The AI engine (Ollama) isn't running." : err.message }) + '\n');
+    }
+    return res.end();
+  }
+
   if (req.method === 'POST' && url.pathname.startsWith('/api/ai/')) {
     const body = await readBody(req);
     const { items } = await getItems();
     const action = url.pathname.slice('/api/ai/'.length);
 
     if (action === 'summary') {
-      const chosen = pickItems(items, body.ids).slice(0, ai.MAX_CONTEXT_STORIES);
+      const chosen = diverse(pickItems(items, body.ids), ai.MAX_CONTEXT_STORIES);
       if (!chosen.length) return sendJson(res, 400, { error: 'No stories to summarise' });
       return streamAi(req, res, ai.summaryPrompt(chosen, String(body.label || 'today').slice(0, 60)), chosen);
     }

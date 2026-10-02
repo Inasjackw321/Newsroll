@@ -22,6 +22,7 @@ const mock = http.createServer((req, res) => {
 
 let ai;
 test.before(async () => {
+  process.env.NEWSROLL_DATA = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'newsroll-test-'));
   await new Promise((r) => mock.listen(0, '127.0.0.1', r));
   process.env.OLLAMA_HOST = `http://127.0.0.1:${mock.address().port}`;
   ai = require('../lib/ai');

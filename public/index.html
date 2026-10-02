@@ -21,15 +21,43 @@
       <svg class="logo" viewBox="20 24 60 52" aria-hidden="true"><path d="M24 72V28h10l16 28V28h10v44H50L34 44v28z"/><circle class="logo-dot" cx="70" cy="67" r="5"/></svg>
       <span class="wordmark">Newsroll</span>
     </a>
+    <div class="appbar-actions">
+    <button class="icon-btn" id="searchBtn" title="Search (/)" aria-label="Search">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </button>
+    <button class="icon-btn" id="settingsBtn" title="Sources & AI settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
     <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
     </button>
+    </div>
   </header>
 
   <main class="wrap">
     <div class="masthead">
       <h1 id="greeting">Today</h1>
       <p class="muted" id="dateLine"></p>
+    </div>
+
+    <div class="welcome hidden" id="welcome">
+      <h2>Welcome to Newsroll</h2>
+      <ul>
+        <li><b>Tap a headline</b> to read more.</li>
+        <li><span class="ai-text">✦</span> buttons use AI to <b>summarise and explain</b>.</li>
+        <li><b>Ask anything</b> about the news in the box at the bottom.</li>
+      </ul>
+      <div class="welcome-actions">
+        <button class="pill-btn" data-open-settings="sources">Choose sources</button>
+        <button class="pill-btn ai" data-open-settings="ai"><span class="spark">✦</span> Set up AI</button>
+        <button class="pill-btn ghost" id="welcomeDismiss">Got it</button>
+      </div>
+    </div>
+
+    <div class="searchbar hidden" id="searchbar">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="searchInput" type="search" placeholder="Search headlines and sources" autocomplete="off" />
+      <button class="close-btn" id="searchClose" aria-label="Close search">×</button>
     </div>
 
     <nav class="filters" id="filters" aria-label="Topics"></nav>
@@ -60,7 +88,7 @@
       <span class="sheet-title"><span class="spark">✦</span> Ask</span>
       <button class="close-btn" id="sheetClose" aria-label="Close">×</button>
     </div>
-    <p class="ai-note hidden" id="aiNote"></p>
+    <div class="ai-note hidden" id="aiNote"></div>
     <div class="thread" id="thread"></div>
     <div class="suggestions" id="suggestions"></div>
   </section>
@@ -72,6 +100,32 @@
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
     </button>
   </form>
+
+  <!-- Settings: sources + AI model -->
+  <div class="panel-backdrop" id="panelBackdrop"></div>
+  <aside class="panel" id="settings" aria-label="Settings" aria-hidden="true">
+    <header class="panel-head">
+      <h2>Settings</h2>
+      <button class="close-btn" id="settingsClose" aria-label="Close settings">×</button>
+    </header>
+    <nav class="tabs" role="tablist">
+      <button role="tab" class="tab-btn active" data-tab="sources">News sources</button>
+      <button role="tab" class="tab-btn" data-tab="ai"><span class="ai-text">✦</span> AI model</button>
+    </nav>
+    <section class="tab-body" id="tab-sources">
+      <form class="add-source" id="addSourceForm" autocomplete="off">
+        <input id="addSourceInput" placeholder="Paste a website, RSS link or @telegram channel" />
+        <button class="pill-btn solid" type="submit">Add</button>
+      </form>
+      <p class="hint" id="addSourceMsg">Add any news site or a public Telegram channel, e.g. <code>@durov</code> or <code>t.me/telegram</code>.</p>
+      <div class="sources-tools">
+        <input id="sourceSearch" type="search" placeholder="Find a source" />
+        <span class="muted small" id="sourceCount"></span>
+      </div>
+      <div id="sourceList"></div>
+    </section>
+    <section class="tab-body hidden" id="tab-ai"></section>
+  </aside>
 
   <template id="skeletonTpl">
     <div class="tl-item skeleton"><span class="tl-dot"></span><div class="tl-card"><div class="sk sk-meta"></div><div class="sk sk-title"></div></div></div>

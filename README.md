@@ -1,6 +1,6 @@
 # Newsroll
 
-A minimal RSS news reader laid out as a single vertical timeline. Each story is a small headline you can tap to expand, and a local language model running in [Ollama](https://ollama.com) (by default [`smollm2`](https://ollama.com/library/smollm2)) adds briefings, Q&A and explanations. Everything runs on your own machine.
+A simple news reader laid out as a single vertical timeline. It pulls from 180+ news sites and Telegram channels. Each story is a small headline you can tap to expand, and a local language model running in [Ollama](https://ollama.com) (by default [`smollm2`](https://ollama.com/library/smollm2)) adds briefings, Q&A and explanations. Everything runs on your own machine.
 
 ## Download the app
 
@@ -15,13 +15,12 @@ Newsroll is a desktop app for **Mac, Windows and Linux**. Get the installer from
 
 After that, open Newsroll like any other app from the Dock, the Start menu or the app launcher. Nothing needs starting in a terminal.
 
-**For the AI features**, install [Ollama](https://ollama.com/download) once and run `ollama pull smollm2`. Newsroll starts Ollama for you when it opens. Without it, the news still works and the Ask panel explains what's missing.
+**For the AI features**, open **Settings → ✦ AI model** in the app and follow the three steps. You install the free [Ollama](https://ollama.com/download) app, then pick a model to download right there. No terminal needed. Newsroll starts Ollama for you each time it opens. Without it, the news still works.
 
 **First launch warnings.** The app isn't signed with a paid Apple or Microsoft certificate, so your computer will warn you the first time:
 - **Mac:** right-click Newsroll in Applications → **Open** → **Open**. If macOS says the app is "damaged", run `xattr -cr /Applications/Newsroll.app` in Terminal.
 - **Windows:** click **More info** → **Run anyway**.
 
-**Changing news sources:** in the app, choose **File → Edit News Sources…**, edit the list and press refresh.
 
 ## Run from source
 
@@ -42,11 +41,34 @@ If none of the feeds can be fetched (for example when you're offline), Newsroll 
 
 Bump `version` in `package.json` (e.g. to `0.2.0`) and push to `main`. GitHub Actions (`.github/workflows/release.yml`) builds the Mac, Windows and Linux installers and publishes them as release `v0.2.0`. Each build takes about 10 minutes.
 
+## Sources
+
+Open **Settings** (the sliders icon at the top right) → **News sources**.
+
+- **181 built-in sources** in 18 groups: top stories, the US, UK, Europe, Asia & Pacific, the Americas, Middle East & Africa, business, tech, science, climate, health, sports, culture & games, good news, fact checks, Reddit and Telegram. A balanced set of 23 is on to start. Flip any switch, or use **Turn all on** for a whole group.
+- **Add your own.** Paste almost anything into the box:
+  - a website (`npr.org`). Newsroll finds its feed for you.
+  - an RSS or Atom link
+  - a public **Telegram channel**: `@channel`, `t.me/channel` or the full link
+- Each source shows how many stories it loaded, or **Couldn't load** if a site is down or has moved its feed.
+
+**Telegram** channels are read from their public web page (`t.me/s/<channel>`), so you don't need a Telegram account. Their posts appear in the timeline with a small *Telegram* tag, and a **Telegram** filter chip appears at the top. Only public channels work. Private channels and groups can't be read this way.
+
+## Choosing the AI
+
+Open **Settings → ✦ AI model**:
+
+- **Your models** lists what's installed. Tap one to switch.
+- **Get more models** offers a few picks, from the tiny SmolLM2 Mini (0.7 GB) to Mistral 7B (4.1 GB). Click **Download** to watch the progress, and Newsroll switches to the new model when it finishes.
+- Or type any model name from [ollama.com/library](https://ollama.com/library).
+
+Your choice is saved and used for summaries, answers and explanations.
+
 ## Using it
 
 The screen has three parts:
 
-1. **Topics**: tap a chip to filter the timeline.
+1. **Topics**: tap a chip to filter the timeline. Tap the 🔍 icon (or press `/`) to search headlines and sources.
 2. **✦ Summary button**: one tap for an AI summary. It adapts to what's most useful: *Summarize today*, *Catch up on N new stories* (since your last visit) or *Summarize Tech* when a topic is selected.
 3. **The timeline**: stories grouped by day. Tap a headline to expand it, then use **✦ Explain** for a *TL;DR / Why it matters / Watch for* breakdown, or **Open story** for the original article. Each day also has a **✦ Summary** button.
 
@@ -58,7 +80,7 @@ At the bottom there's an **Ask about the news** box. Type a question, or pick a 
 
 **Animations:** stories rise in as you scroll, the timeline line fills as you read, stories expand smoothly, answers type out live and the Ask panel slides up. If your system is set to reduce motion, all of this is turned off.
 
-**Keyboard:** `j` / `k` move between stories, `Enter` expands one, `/` asks a question and `Esc` closes the panel.
+**Keyboard:** `j` / `k` move between stories, `Enter` expands one, `/` searches, `Ctrl/⌘ K` asks a question, `Ctrl/⌘ ,` opens sources (desktop app) and `Esc` closes whatever's open.
 
 ## Configuration
 
@@ -67,13 +89,10 @@ At the bottom there's an **Ask about the news** box. Type a question, or pick a 
 | `PORT`         | `3000`                   | HTTP port (browser version)         |
 | `HOST`         | `127.0.0.1`              | Interface to listen on (browser version) |
 | `OLLAMA_HOST`  | `http://127.0.0.1:11434` | Where Ollama is running             |
-| `OLLAMA_MODEL` | `smollm2`                | Any chat model you've pulled, e.g. `smollm2:360m` for speed or `llama3.2` for quality |
+| `OLLAMA_MODEL` | `smollm2`                | Default model until you pick one in Settings |
+| `NEWSROLL_DATA`| `./data`                 | Where settings are saved (the desktop app uses your system's app-data folder) |
 
-Edit `feeds.json` to change the news sources. Any RSS 2.0 or Atom feed works:
-
-```json
-[{ "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/rss.xml" }]
-```
+To change the built-in source list, edit `lib/catalog.js`.
 
 ## How it works
 
@@ -81,6 +100,9 @@ Edit `feeds.json` to change the news sources. Any RSS 2.0 or Atom feed works:
 electron/        Desktop app: starts the server in-process and opens a native window
 server.js        HTTP server: static files, /api/feed, /api/ai/* (streams model output)
 lib/rss.js       Dependency-free RSS/Atom parser
+lib/telegram.js  Reads public Telegram channels from t.me/s/<channel>
+lib/catalog.js   The built-in list of 181 sources
+lib/settings.js  Saves enabled sources, added sources and the chosen model
 lib/topics.js    Keyword topic tagging
 lib/ai.js        Prompts, relevance ranking and Ollama streaming
 lib/sample.js    Offline sample stories
@@ -88,7 +110,7 @@ public/          The app: index.html, styles.css, app.js, the service worker
                  (sw.js), manifest and icons
 ```
 
-The server caches feeds for 5 minutes and keeps stories from the last 3 days. The AI endpoints build short, numbered prompts sized for small models, then stream Ollama's output straight to the browser. The IDs of the stories the model saw are sent in a response header, which is how the browser turns `[n]` into links.
+The server fetches the enabled sources 12 at a time, caches them for 5 minutes, merges duplicate headlines and keeps up to 800 stories from the last 2 days. Summaries pick at most two stories per source, so one busy feed can't dominate. The AI endpoints build short, numbered prompts sized for small models, then stream Ollama's output straight to the browser. The IDs of the stories the model saw are sent in a response header, which is how the browser turns `[n]` into links.
 
 ## Tests
 

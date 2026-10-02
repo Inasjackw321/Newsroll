@@ -15,6 +15,7 @@
     prevVisit: Number(storage(VISIT_KEY)) || 0,
     pending: null,
     ai: null,
+    query: '',
   };
 
   function storage(key, value) {
@@ -76,7 +77,16 @@
       .map((r) => r.o);
   }
 
-  const visibleItems = () => (state.topic === 'all' ? state.items : state.items.filter((it) => it.topic === state.topic));
+  function visibleItems() {
+    let list = state.items;
+    if (state.topic === 'Telegram') list = list.filter((it) => it.type === 'telegram');
+    else if (state.topic !== 'all') list = list.filter((it) => it.topic === state.topic);
+    const q = state.query.trim().toLowerCase();
+    if (q) list = list.filter((it) => `${it.title} ${it.summary} ${it.source}`.toLowerCase().includes(q));
+    return list;
+  }
+
+  const aiReady = () => Boolean(state.ai?.online && state.ai?.installed);
 
   // ---------- Feed loading ----------
   async function loadFeed({ force = false, initial = false } = {}) {
@@ -127,10 +137,15 @@
 
   function updateFooter(data) {
     const time = new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    const sources = (data.feeds || []).length - data.errors.length;
-    $('#footNote').textContent = data.sample
-      ? `Couldn't reach the news feeds, so these are sample stories. Updated ${time}.`
-      : `${plural(data.items.length, 'story', 'stories')} from ${plural(sources, 'source')}. Updated ${time}.`;
+    const foot = $('#footNote');
+    if (!data.sources) {
+      foot.innerHTML = `No sources are switched on. <button class="link-btn" data-open-settings="sources">Choose sources</button>`;
+      return;
+    }
+    const failed = data.failed?.length ? ` · ${data.failed.length} couldn't load` : '';
+    foot.innerHTML = data.sample
+      ? `Couldn't reach your news sources, so these are sample stories. <button class="link-btn" data-open-settings="sources">Check sources</button>`
+      : `${plural(data.items.length, 'story', 'stories')} from ${plural(data.sources, 'source')}${failed} · Updated ${time} · <button class="link-btn" data-open-settings="sources">Manage sources</button>`;
   }
 
   function renderMasthead() {
@@ -157,8 +172,9 @@
     const counts = {};
     for (const it of state.items) counts[it.topic] = (counts[it.topic] || 0) + 1;
     const topics = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-    if (state.topic !== 'all' && !counts[state.topic]) state.topic = 'all';
-    $('#filters').innerHTML = ['all', ...topics]
+    const hasTelegram = state.items.some((it) => it.type === 'telegram');
+    if (state.topic !== 'all' && !counts[state.topic] && !(state.topic === 'Telegram' && hasTelegram)) state.topic = 'all';
+    $('#filters').innerHTML = ['all', ...(hasTelegram ? ['Telegram'] : []), ...topics]
       .map((t) => `<button class="filter${state.topic === t ? ' active' : ''}" data-topic="${esc(t)}">${t === 'all' ? 'All' : esc(t)}</button>`)
       .join('');
   }
@@ -170,7 +186,7 @@
       <article class="tl-item${fresh ? ' fresh' : ''}" data-id="${it.id}" tabindex="-1">
         <span class="tl-dot"></span>
         <div class="tl-card" role="button" tabindex="0" aria-expanded="false">
-          <div class="tl-meta"><time datetime="${esc(it.published)}">${relTime(t)}</time> · ${esc(it.source)}${fresh ? ' · <b>New</b>' : ''}</div>
+          <div class="tl-meta"><time datetime="${esc(it.published)}">${relTime(t)}</time> · ${esc(it.source)}${it.type === 'telegram' ? ' <span class="tg">Telegram</span>' : ''}${fresh ? ' · <b>New</b>' : ''}</div>
           <h3 class="tl-title">${esc(it.title)}</h3>
           <div class="tl-more"><div><div class="tl-more-inner"></div></div></div>
         </div>
@@ -184,7 +200,9 @@
     const list = visibleItems();
     const body = $('#timelineBody');
     if (!list.length) {
-      body.innerHTML = '<div class="empty">No stories here yet.</div>';
+      body.innerHTML = state.query
+        ? `<div class="empty">No stories match “${esc(state.query)}”.</div>`
+        : '<div class="empty">No stories here yet.</div>';
       return;
     }
 
@@ -401,6 +419,7 @@
   function generateSummary() {
     const { items, label } = summarySet();
     if (!items.length) return;
+    if (!aiReady()) return openSettings('ai');
     const box = $('#summaryBox');
     box.classList.remove('hidden');
     streamInto($('.ai-output', box), 'summary', { ids: items.slice(0, 20).map((i) => i.id), label }, $('#summaryBtn'));
@@ -448,8 +467,9 @@
       const ready = s.online && s.installed;
       $('#aiSpark').classList.toggle('off', !ready);
       note.classList.toggle('hidden', ready);
-      if (!s.online) note.innerHTML = `AI is offline. Start Ollama with <code>ollama serve</code>.`;
-      else if (!s.installed) note.innerHTML = `Almost there. Run <code>ollama pull ${esc(s.model)}</code> to enable AI.`;
+      note.innerHTML = `<span>${s.online ? `The AI model <b>${esc(s.model)}</b> isn't downloaded yet.` : 'The AI is switched off.'}</span>
+        <button class="pill-btn ai" data-open-settings="ai"><span class="spark">✦</span> Set up AI</button>`;
+      if ($('#settings').classList.contains('open') && state.tab === 'ai') renderAiTab();
       clearTimeout(statusTimer);
       if (!ready) statusTimer = setTimeout(checkAi, 15000);
     } catch {
@@ -494,7 +514,11 @@
     const filter = e.target.closest('.filter');
     if (filter) return setTopic(filter.dataset.topic);
 
+    const opener = e.target.closest('[data-open-settings]');
+    if (opener) return openSettings(opener.dataset.openSettings);
+
     const explain = e.target.closest('.explain-btn');
+    if (explain && !aiReady()) return openSettings('ai');
     if (explain) {
       const item = explain.closest('.tl-item');
       let out = $('.tl-explain .ai-output', item);
@@ -507,6 +531,7 @@
     }
 
     const daySum = e.target.closest('.day-sum');
+    if (daySum && !aiReady()) return openSettings('ai');
     if (daySum) {
       const day = Number(daySum.closest('.day').dataset.day);
       const box = $(`[data-day-summary="${day}"]`);
@@ -522,9 +547,14 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && $('#sheet').classList.contains('open')) { closeSheet(); return; }
+    if (e.key === 'Escape') {
+      if ($('#settings').classList.contains('open')) return closeSettings();
+      if ($('#sheet').classList.contains('open')) return closeSheet();
+      if (!$('#searchbar').classList.contains('hidden')) return closeSearch();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); $('#askInput').focus(); return; }
     const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
-    if (e.key === '/' && !typing) { e.preventDefault(); $('#askInput').focus(); return; }
+    if (e.key === '/' && !typing) { e.preventDefault(); openSearch(); return; }
     if (typing) return;
     if (e.key === 'j') moveFocus(1);
     else if (e.key === 'k') moveFocus(-1);
@@ -567,6 +597,349 @@
     $$('.tl-item time').forEach((t) => (t.textContent = relTime(Date.parse(t.dateTime))));
     renderMasthead();
   }, 60000);
+
+  // ---------- Search ----------
+  function openSearch() {
+    $('#searchbar').classList.remove('hidden');
+    $('#searchInput').focus();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function closeSearch() {
+    $('#searchbar').classList.add('hidden');
+    if (state.query) {
+      state.query = '';
+      $('#searchInput').value = '';
+      render();
+    }
+  }
+
+  let searchTimer;
+  $('#searchInput').addEventListener('input', (e) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.query = e.target.value;
+      render();
+    }, 150);
+  });
+  $('#searchBtn').addEventListener('click', () => ($('#searchbar').classList.contains('hidden') ? openSearch() : closeSearch()));
+  $('#searchClose').addEventListener('click', closeSearch);
+
+  // ---------- Welcome (first run) ----------
+  const WELCOME_KEY = 'newsroll:welcomed';
+  if (!storage(WELCOME_KEY)) $('#welcome').classList.remove('hidden');
+  $('#welcomeDismiss').addEventListener('click', () => {
+    storage(WELCOME_KEY, '1');
+    $('#welcome').classList.add('hidden');
+  });
+
+  // ---------- Settings panel ----------
+  state.tab = 'sources';
+  let sourcesData = null;
+  let sourcesChanged = false;
+  const openGroups = new Set(['Added by you', 'Telegram']);
+
+  function openSettings(tab = state.tab) {
+    closeSheet();
+    storage(WELCOME_KEY, '1');
+    $('#welcome').classList.add('hidden');
+    const panel = $('#settings');
+    panel.classList.add('open');
+    panel.setAttribute('aria-hidden', 'false');
+    $('#panelBackdrop').classList.add('show');
+    document.body.classList.add('sheet-open');
+    showTab(tab);
+  }
+
+  function closeSettings() {
+    const panel = $('#settings');
+    panel.classList.remove('open');
+    panel.setAttribute('aria-hidden', 'true');
+    $('#panelBackdrop').classList.remove('show');
+    document.body.classList.remove('sheet-open');
+    if (sourcesChanged) {
+      sourcesChanged = false;
+      loadFeed({ force: true, initial: true });
+    }
+  }
+
+  function showTab(tab) {
+    state.tab = tab;
+    $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    $('#tab-sources').classList.toggle('hidden', tab !== 'sources');
+    $('#tab-ai').classList.toggle('hidden', tab !== 'ai');
+    if (tab === 'sources') loadSources();
+    else checkAi().then(renderAiTab);
+  }
+
+  // ----- Sources tab -----
+  async function loadSources() {
+    if (!sourcesData) $('#sourceList').innerHTML = '<p class="muted">Loading sources…</p>';
+    sourcesData = await (await fetch('/api/sources')).json();
+    renderSources();
+  }
+
+  function statusText(src) {
+    if (!src.enabled) return '';
+    if (!src.status) return '<span class="st">Not loaded yet</span>';
+    return src.status.ok
+      ? `<span class="st ok">${plural(src.status.count, 'story', 'stories')}</span>`
+      : `<span class="st bad" title="${esc(src.status.error)}">Couldn't load</span>`;
+  }
+
+  function renderSources() {
+    const { groups, sources } = sourcesData;
+    const q = $('#sourceSearch').value.trim().toLowerCase();
+    const on = sources.filter((s) => s.enabled).length;
+    $('#sourceCount').textContent = `${on} of ${sources.length} on`;
+
+    // Put the user's own sources and Telegram near the top.
+    const order = ['Added by you', 'Top stories', 'Telegram', ...groups.filter((g) => !['Added by you', 'Top stories', 'Telegram'].includes(g))];
+    $('#sourceList').innerHTML = order
+      .map((group) => {
+        const list = sources.filter((s) => s.group === group && (!q || `${s.name} ${s.url}`.toLowerCase().includes(q)));
+        if (!list.length) return '';
+        const groupOn = list.filter((s) => s.enabled).length;
+        const open = q || openGroups.has(group);
+        return `
+          <details class="group" data-group="${esc(group)}" ${open ? 'open' : ''}>
+            <summary>
+              <span class="group-name">${esc(group)}${group === 'Telegram' ? ' <span class="tg">channels</span>' : ''}</span>
+              <span class="muted small">${groupOn} of ${list.length} on</span>
+              <button class="link-btn group-toggle" data-ids="${list.map((s) => s.id).join(',')}" data-on="${groupOn < list.length}">${groupOn < list.length ? 'Turn all on' : 'Turn all off'}</button>
+            </summary>
+            ${list
+              .map(
+                (s) => `
+              <label class="source-row">
+                <input type="checkbox" class="switch" data-id="${s.id}" ${s.enabled ? 'checked' : ''} />
+                <span class="source-name">${esc(s.name)}</span>
+                ${s.type === 'telegram' ? `<span class="tg">${esc('@' + s.url)}</span>` : ''}
+                ${statusText(s)}
+                ${s.custom ? `<button class="close-btn remove-source" data-id="${s.id}" title="Remove" aria-label="Remove ${esc(s.name)}">×</button>` : ''}
+              </label>`,
+              )
+              .join('')}
+          </details>`;
+      })
+      .join('') || `<p class="muted">No sources match “${esc(q)}”. You can add it above.</p>`;
+  }
+
+  async function setSources(ids, enabled) {
+    sourcesChanged = true;
+    for (const s of sourcesData.sources) if (ids.includes(s.id)) s.enabled = enabled;
+    renderSources();
+    await fetch('/api/sources', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, enabled }) });
+  }
+
+  $('#sourceList').addEventListener('change', (e) => {
+    if (e.target.matches('.switch')) setSources([e.target.dataset.id], e.target.checked);
+  });
+
+  $('#sourceList').addEventListener('click', async (e) => {
+    const toggle = e.target.closest('.group-toggle');
+    if (toggle) {
+      e.preventDefault();
+      return setSources(toggle.dataset.ids.split(','), toggle.dataset.on === 'true');
+    }
+    const remove = e.target.closest('.remove-source');
+    if (remove) {
+      e.preventDefault();
+      sourcesChanged = true;
+      await fetch(`/api/sources/${remove.dataset.id}`, { method: 'DELETE' });
+      loadSources();
+    }
+  });
+
+  // Remember which groups are expanded.
+  $('#sourceList').addEventListener('toggle', (e) => {
+    const g = e.target.dataset?.group;
+    if (g) e.target.open ? openGroups.add(g) : openGroups.delete(g);
+  }, true);
+
+  $('#sourceSearch').addEventListener('input', () => sourcesData && renderSources());
+
+  $('#addSourceForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $('#addSourceInput');
+    const msg = $('#addSourceMsg');
+    const btn = $('#addSourceForm button');
+    if (!input.value.trim()) return input.focus();
+    btn.disabled = true;
+    msg.className = 'hint';
+    msg.textContent = 'Checking…';
+    try {
+      const res = await fetch('/api/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: input.value }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      sourcesChanged = true;
+      openGroups.add(data.source.group);
+      input.value = '';
+      msg.className = data.warning && !data.source.existed ? 'hint warn' : 'hint ok';
+      msg.textContent = data.source.existed
+        ? `${data.source.name} is already in your list, so it's been switched on.`
+        : `Added ${data.source.name}.${data.warning ? ` ${data.warning}` : ''}`;
+      loadSources();
+    } catch (err) {
+      msg.className = 'hint warn';
+      msg.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ----- AI tab -----
+  const pulls = {}; // model -> { pct, status, error }
+  const gb = (bytes) => (bytes ? `${(bytes / 1e9).toFixed(1)} GB` : '');
+
+  function renderAiTab() {
+    const s = state.ai;
+    const el = $('#tab-ai');
+    if (!s) {
+      el.innerHTML = '<p class="muted">Checking…</p>';
+      return;
+    }
+    if (!s.online) {
+      el.innerHTML = `
+        <div class="setup">
+          <h3>Turn on AI in three steps</h3>
+          <p class="muted">Newsroll's AI runs privately on your own computer using a free app called Ollama. Nothing you read or ask leaves your machine.</p>
+          <ol class="steps">
+            <li><b>Download Ollama</b>. It's free.<br><a class="pill-btn solid" href="https://ollama.com/download" target="_blank" rel="noopener">Download Ollama ↗</a></li>
+            <li><b>Install and open it.</b> It runs quietly in the background.</li>
+            <li><b>Come back here</b> and pick a model to download.<br><button class="pill-btn" id="aiRetry">Check again</button></li>
+          </ol>
+        </div>`;
+      return;
+    }
+
+    const installed = s.models || [];
+    const isInstalled = (name) => installed.some((m) => sameModel(m.name, name));
+    const current = s.model;
+
+    const installedHtml = installed.length
+      ? installed
+          .map(
+            (m) => `
+          <label class="model-row${sameModel(m.name, current) ? ' current' : ''}">
+            <input type="radio" name="model" value="${esc(m.name)}" ${sameModel(m.name, current) ? 'checked' : ''} />
+            <span class="model-name">${esc(m.name)}</span>
+            <span class="muted small">${esc([m.params, gb(m.size)].filter(Boolean).join(' · '))}</span>
+          </label>`,
+          )
+          .join('')
+      : '<p class="muted">No models downloaded yet. Pick one below. SmolLM2 is a good start.</p>';
+
+    const recHtml = s.recommended
+      .map((r) => {
+        const p = pulls[r.name];
+        const have = isInstalled(r.name);
+        let action;
+        if (p && !p.error && !p.done) action = `<div class="progress"><i style="width:${p.pct || 0}%"></i></div><span class="muted small">${esc(p.status || 'Starting…')}${p.pct ? ` · ${p.pct}%` : ''}</span>`;
+        else if (have && sameModel(r.name, current)) action = '<span class="st ok">In use</span>';
+        else if (have) action = `<button class="pill-btn" data-use="${esc(r.name)}">Use</button>`;
+        else action = `<button class="pill-btn ai" data-pull="${esc(r.name)}">Download · ${esc(r.size)}</button>`;
+        return `
+          <div class="rec-row">
+            <div><div class="model-name">${esc(r.label)} <span class="muted small">${esc(r.name)}</span></div><div class="muted small">${esc(r.note)}</div>
+            ${p?.error ? `<div class="hint warn">${esc(p.error)}</div>` : ''}</div>
+            <div class="rec-action">${action}</div>
+          </div>`;
+      })
+      .join('');
+
+    el.innerHTML = `
+      <div class="ai-current ${isInstalled(current) ? 'ok' : 'warn'}">
+        <span class="spark">✦</span>
+        <div><b>${esc(current)}</b><div class="muted small">${isInstalled(current) ? 'Ready. Used for summaries, answers and explanations.' : 'Selected, but not downloaded yet. Download it below or pick another.'}</div></div>
+      </div>
+      <h3>Your models</h3>
+      <div class="model-list">${installedHtml}</div>
+      <h3>Get more models</h3>
+      <div class="rec-list">${recHtml}</div>
+      <form class="add-source" id="customModelForm" autocomplete="off">
+        <input id="customModel" placeholder="Or type any Ollama model name, e.g. llama3.1:8b" />
+        <button class="pill-btn" type="submit">Download</button>
+      </form>
+      <p class="hint">Bigger models give better answers but are slower. Browse all models at <a href="https://ollama.com/library" target="_blank" rel="noopener">ollama.com/library</a>.</p>`;
+  }
+
+  function sameModel(a, b) {
+    const tag = (n) => (n.includes(':') ? n : `${n}:latest`);
+    return tag(a) === tag(b);
+  }
+
+  async function useModel(name) {
+    const res = await fetch('/api/ai/model', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
+    state.ai = await res.json();
+    await checkAi();
+    renderAiTab();
+  }
+
+  async function pullModel(name) {
+    pulls[name] = { status: 'Starting download…' };
+    renderAiTab();
+    try {
+      const res = await fetch('/api/ai/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let last = 0;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const p = JSON.parse(line);
+          if (p.error) throw new Error(p.error);
+          const status = p.status === 'success' ? 'Finishing…' : /^pulling [0-9a-f]{6,}/.test(p.status || '') ? 'Downloading' : p.status;
+          pulls[name] = { status, pct: p.total ? Math.floor((p.completed / p.total) * 100) : pulls[name].pct, done: p.done };
+        }
+        // Re-render at most a few times a second.
+        if (Date.now() - last > 250 && state.tab === 'ai') {
+          last = Date.now();
+          renderAiTab();
+        }
+      }
+      delete pulls[name];
+      await useModel(name); // switch to it straight away: that's almost always what you want
+    } catch (err) {
+      pulls[name] = { error: `Download failed: ${err.message}` };
+      renderAiTab();
+    }
+  }
+
+  $('#tab-ai').addEventListener('change', (e) => {
+    if (e.target.name === 'model') useModel(e.target.value);
+  });
+  $('#tab-ai').addEventListener('click', (e) => {
+    const pull = e.target.closest('[data-pull]');
+    if (pull) return pullModel(pull.dataset.pull);
+    const use = e.target.closest('[data-use]');
+    if (use) return useModel(use.dataset.use);
+    if (e.target.closest('#aiRetry')) {
+      e.target.textContent = 'Checking…';
+      checkAi().then(renderAiTab);
+    }
+  });
+  $('#tab-ai').addEventListener('submit', (e) => {
+    if (e.target.id !== 'customModelForm') return;
+    e.preventDefault();
+    const name = $('#customModel').value.trim();
+    if (name) pullModel(name);
+  });
+
+  $$('.tab-btn').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+  $('#settingsBtn').addEventListener('click', () => openSettings());
+  $('#settingsClose').addEventListener('click', closeSettings);
+  $('#panelBackdrop').addEventListener('click', closeSettings);
+
+  // Lets the desktop app's menu open these screens.
+  window.newsroll = { openSettings };
 
   // ---------- Boot ----------
   renderMasthead();
